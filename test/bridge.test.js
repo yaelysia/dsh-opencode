@@ -23,6 +23,7 @@ test('translates official OpenCode session response into DSH stream', async () =
     ['block-start', 'text-delta', 'block-end', 'usage', 'finish']);
   assert.equal(result[1].text, 'test reply');
   assert.equal(calls[1].data.model.modelID, 'deepseek-v4.1-flash-free');
+  assert.equal(calls[1].data.agent, 'dsh-bridge');
   assert.deepEqual(calls.map(x => new URL(x.url).pathname),
     ['/session', '/session/sess-a/message']);
 });
