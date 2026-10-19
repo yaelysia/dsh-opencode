@@ -12,6 +12,8 @@ export const Config = Schema.object({
   agent: Schema.string().default('plan'),
   username: Schema.string().default('opencode'),
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
+  localTitles: Schema.boolean().default(true),
+  timeoutMs: Schema.number().default(120000),
   models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]),
 });
 
