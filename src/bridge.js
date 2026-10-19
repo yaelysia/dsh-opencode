@@ -67,6 +67,7 @@ export class OpenCodeServeClient {
     this.username = config.username || 'opencode';
     this.fetchImpl = fetchImpl;
     this.attributionHeaders = config.attributionHeaders ?? {};
+    this.logger = config.logger;
     this.sessions = new Map();
   }
 
@@ -94,6 +95,7 @@ export class OpenCodeServeClient {
     }
     if (!response.ok) {
       const message = await readError(response);
+      this.logger?.warn?.('dsh-opencode: OpenCode serve returned HTTP ' + response.status + ': ' + message);
       throw failure('OpenCode serve HTTP ' + response.status + ': ' + message,
         response.status === 401 ? 'AUTH' : 'PROVIDER_HTTP_ERROR', response.status);
     }
@@ -157,6 +159,7 @@ export class OpenCodeServeClient {
       const message = details.message ?? upstreamError.message ??
         details.responseBody ?? 'model request failed';
       const kind = upstreamError.name ?? 'ModelError';
+      this.logger?.warn?.('dsh-opencode: ' + kind + ': ' + String(message).slice(0, 1200));
       throw failure('OpenCode ' + kind + ': ' + String(message).slice(0, 1200),
         code === 429 ? 'RATE_LIMIT' : code === 403 ? 'FORBIDDEN' : 'MODEL_ERROR', code);
     }
@@ -167,6 +170,7 @@ export class OpenCodeServeClient {
       .map((part) => part.text ?? '').join('');
     if (!text.trim()) {
       const kinds = response.parts.map((part) => part?.type || '?').join(', ') || 'none';
+      this.logger?.warn?.('dsh-opencode: OpenCode returned no visible text, parts: ' + kinds);
       throw failure('OpenCode returned no visible text (part types: ' + kinds +
         '). Check the OpenCode server logs.', 'EMPTY_RESPONSE');
     }
