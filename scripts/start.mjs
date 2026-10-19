@@ -8,6 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { diagnose, proxySummary } from './doctor.mjs';
 import { redact } from '../src/errors.js';
 import { childEnvironment } from '../src/service-env.js';
+import { BRIDGE_AGENT_ID, managedAgentEnvironment } from '../src/managed-agent.js';
 export { childEnvironment } from '../src/service-env.js';
 
 export async function ensurePortFree(port) {
@@ -31,7 +32,7 @@ export async function main(args = process.argv.slice(2)) {
   const root = path.resolve(values.root || path.join(local || process.cwd(), 'OpenCodeRuntime'));
   await access(exe);
   await ensurePortFree(port);
-  const env = childEnvironment(process.env, root, values.direct);
+  const env = managedAgentEnvironment(childEnvironment(process.env, root, values.direct), BRIDGE_AGENT_ID);
   for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
     await mkdir(env[key], { recursive: true });
   }
