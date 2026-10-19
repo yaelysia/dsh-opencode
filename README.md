@@ -2,7 +2,7 @@
 
 通过本地 [OpenCode 官方服务](https://opencode.ai/docs/server/) 接入 DSH 原生模型选择器。
 
-**0.1.2 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+**0.1.3 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
 
 ## Windows：先做一次独立链路测试
 
@@ -43,11 +43,17 @@ node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
 
 ## 安装 DSH 插件
 
-在 OpenCode 独立测试返回文本之后，再安装/更新插件并重启 DSH：
+在 OpenCode 独立测试返回文本之后，再安装/更新插件。
 
-```powershell
-dsh plugin --profile desktop add "git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider"
+**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用下面的 Git 来源安装/更新，确认安装版本为 `0.1.3` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
+
+```text
+git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 ```
+
+已确认 CLI profile 的用户可以使用 `dsh plugin --profile <实际 profile 名> add <安装来源>`。为固定安装内容，将上述分支名换成经过核对的完整提交 SHA。
+
+标题修复不需要重新下载、重装或重启已经工作的 OpenCode 服务；保留其服务窗口。
 
 模型选择器中的提供商为 `OpenCode (official serve)`，默认包含 `deepseek-v4.1-flash-free` 和 `glm-5.3-flash-free`。这份插件目录是可配置的模型 ID 列表，不是实时可用性保证；诊断器会另外核对 OpenCode 服务的真实目录。
 
@@ -61,7 +67,22 @@ dsh plugin --profile desktop add "git+https://github.com/yaelysia/dsh-opencode.g
 | timeoutMs | 120000 | 单个本地 HTTP 请求期限 |
 | username / passwordEnv | opencode / OPENCODE_SERVER_PASSWORD | 本地服务 Basic Auth；密码仅从环境读取 |
 
-## 这轮修复
+## 0.1.3：修复会话标题
+
+0.1.2 的本地标题逻辑错误地截取了标题请求的外层指令，导致侧栏出现 `Generate the session title from...`。DSH 0.2.1-rc.2 实际把人类消息包装成如下输入：
+
+```text
+Generate the session title from this JSON array of human messages:
+[{"seq":7,"text":"只回复数字1，不使用工具。"}]
+```
+
+现在仅在 `purpose: session-title` 的本地分支中解析这个 JSON，读取真实的 `text`，示例标题为 `只回复数字1，不使用工具。`。也支持更新标题时的 `{ currentTitle, messages }` 格式；已有正常标题保持不变，旧版指令标题会在宿主下次请求更新时重新从人类消息提取。畸形/未知框架返回 `INVALID_TITLE_INPUT`，不把框架指令写成标题。
+
+`localTitles: true` 仍然表示**本地首条有效人类消息的短摘录**（最多 40 个 Unicode 码点），不是模型语义总结，不额外调用免费模型。普通聊天、网络路径和模型选择不变。
+
+**安装更新不会批量改写已保存的标题。** 默认首条消息标题策略可能不会重新生成旧会话标题；新会话使用修复逻辑，旧会话可在 DSH 中手动重命名。
+
+## 请求保护与错误处理
 
 标题辅助请求不再额外请求模型；主请求串行派发，避免并发创建会话。不同模型/用途的会话隔离，改写历史及失败后不再复用旧游标。系统指令传入官方 `system` 字段。
 
@@ -77,6 +98,7 @@ dsh plugin --profile desktop add "git+https://github.com/yaelysia/dsh-opencode.g
 | UPGRADE_REQUIRED | 服务明确要求升级 |
 | MODEL_NOT_FOUND / MODEL_MISMATCH | 服务目录缺少模型 / 返回了不同模型 |
 | EMPTY_RESPONSE / TIMEOUT | 无可见文本 / 本地请求超时 |
+| INVALID_TITLE_INPUT | 本地标题请求框架损坏或不支持，不输出指令标题 |
 
 错误和诊断保留必要状态，不输出完整 provider/config 数据、认证头或提示词。Wire Trace 只反映 DSH 到本地 OpenCode 的 HTTP 链路，HTTP 200 不等于云端推理成功。
 
@@ -91,6 +113,8 @@ dsh plugin --profile desktop add "git+https://github.com/yaelysia/dsh-opencode.g
 - [OpenCode Network：代理环境变量与本地 NO_PROXY](https://opencode.ai/docs/network/)
 - [OpenCode Server：健康检查、模型目录、会话消息 API](https://opencode.ai/docs/server/)
 - [IP 限制报告 #56853](https://github.com/anomalyco/opencode/issues/56853)：官方机器人回复建议联系 `help@anoma.ly`；没有可据此保证的自动解封期限。
-- [DSH Bundle 发布规范](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)
+- [DSH 0.2.1-rc.2 标题请求包装](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/packages/session/session-title-first-prompt-llm/src/index.ts)
+- [DSH 0.2.1-rc.2 多轮标题更新](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/packages/experimental/session-title-all-prompts-llm/src/index.ts)
+- [DSH Bundle 发布规范](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/docs/user/develop/basic/publish.md)
 
 MIT License。

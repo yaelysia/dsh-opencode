@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { failure, providerFailure } from './errors.js';
+import { localSessionTitle } from './title.js';
 
 export const DEFAULT_MODELS = Object.freeze([
   'deepseek-v4.1-flash-free',
@@ -179,7 +180,7 @@ export function createAdapter(config = {}, fetchImpl) {
         if (config.localTitles !== false && options?.purpose === 'session-title') {
           if (options.signal?.aborted) throw failure('Title request cancelled', 'ABORTED');
           const first = options.messages?.find(m => m.role === 'user');
-          const title = Array.from(textOf(first?.content).replace(/\s+/g, ' ').trim()).slice(0, 40).join('') || 'New conversation';
+          const title = localSessionTitle(textOf(first?.content));
           config.logger?.info?.('dsh-opencode: session title generated locally; no model request');
           yield* textChunks(title);
           yield { type: 'finish', reason: { kind: 'stop' } };
