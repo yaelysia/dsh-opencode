@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { childEnvironment } from './service-env.js';
+import { BRIDGE_AGENT_ID, managedAgentEnvironment } from './managed-agent.js';
 import { failure } from './errors.js';
 
 const START_TIMEOUT_MS = 15_000;
@@ -92,6 +93,37 @@ export class OpenCodeService {
     } catch { return false; }
   }
 
+  /** Fail visibly if an existing OpenCode service lacks the DSH-specific agent. */
+  async assertAgentPresent() {
+    const agent = this.config.agent || BRIDGE_AGENT_ID;
+    if (!this.target) return;
+    const headers = {};
+    const password = this.env[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'];
+    if (password) {
+      const username = this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode';
+      headers.authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
+    }
+    let response;
+    try {
+      response = await this.fetchImpl(this.target.origin + '/agent', {
+        method: 'GET', headers, redirect: 'error',
+        signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(1500)]),
+      });
+    } catch (error) {
+      throw failure('Cannot check OpenCode agent: ' + error.message, 'SERVER_AGENT_CHECK_FAILED');
+    }
+    if (!response.ok) {
+      throw failure('OpenCode agent lookup returned HTTP ' + response.status, 'SERVER_AGENT_CHECK_FAILED', response.status);
+    }
+    let agents;
+    try { agents = await response.json(); } catch {}
+    if (!Array.isArray(agents)) throw failure('Invalid OpenCode agent list', 'SERVER_AGENT_CHECK_FAILED');
+    if (!agents.some(item => item?.name === agent)) {
+      throw failure('OpenCode agent "' + agent + '" is missing. Stop the old manual opencode serve '
+        + 'process and restart DSH Desktop so the plugin can start its isolated server.', 'SERVER_AGENT_MISSING');
+    }
+  }
+
   /** Called at plugin mount and before each ordinary model call. */
   async ready() {
     if (this.closed) throw failure('OpenCode plugin is unloading', 'SERVER_STOPPED');
@@ -104,6 +136,7 @@ export class OpenCodeService {
 
   async ensureStarted() {
     if (await this.health()) {
+      await this.assertAgentPresent();
       if (!this.owned) this.logger.info?.('dsh-opencode: reusing an existing local OpenCode server');
       return;
     }
@@ -121,7 +154,10 @@ export class OpenCodeService {
       catch { throw failure('OpenCode executable not found: ' + exe +
         '. Configure opencodeExecutable.', 'SERVER_NOT_INSTALLED'); }
     }
-    const childEnv = childEnvironment(this.env, root, this.config.autoStartDirect !== false);
+    const childEnv = managedAgentEnvironment(
+      childEnvironment(this.env, root, this.config.autoStartDirect !== false),
+      this.config.agent || BRIDGE_AGENT_ID,
+    );
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
     }
@@ -142,6 +178,7 @@ export class OpenCodeService {
       do {
         this.controller.signal.throwIfAborted();
         if (await this.health()) {
+          await this.assertAgentPresent();
           this.readyOwned = terminal === null;
           this.logger.info?.('dsh-opencode: local OpenCode server ready at ' + origin);
           return;
