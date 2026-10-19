@@ -2,7 +2,7 @@ import Schema from '@deepseek-ai/schemastery';
 import { LlmAdapter, attributionHeaders } from '@deepseek-ai/dsh-llm';
 import { createAdapter, DEFAULT_MODELS } from './src/bridge.js';
 
-export const name = 'dsh-opencode';
+export const name = 'opencode-serve';
 export const inject = ['llm'];
 
 export const Config = Schema.object({
