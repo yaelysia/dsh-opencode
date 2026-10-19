@@ -66,11 +66,12 @@ export class OpenCodeServeClient {
     this.passwordEnv = config.passwordEnv || 'OPENCODE_SERVER_PASSWORD';
     this.username = config.username || 'opencode';
     this.fetchImpl = fetchImpl;
+    this.attributionHeaders = config.attributionHeaders ?? {};
     this.sessions = new Map();
   }
 
   headers() {
-    const headers = { 'content-type': 'application/json', accept: 'application/json' };
+    const headers = { ...this.attributionHeaders, 'content-type': 'application/json', accept: 'application/json' };
     const password = process.env[this.passwordEnv];
     if (password) {
       headers.authorization = 'Basic ' + Buffer.from(this.username + ':' + password).toString('base64');
@@ -145,8 +146,29 @@ export class OpenCodeServeClient {
       if (error.failure?.status === 404 && key) this.sessions.delete(key);
       throw error;
     }
+    // OpenCode may answer HTTP 200 with a model failure in info.error
+    // and no text parts. Never convert that into a successful DSH turn.
+    if (response?.info?.error) {
+      const upstreamError = response.info.error;
+      const details = upstreamError.data ?? {};
+      const status = Number(details.statusCode ?? details.status ?? upstreamError.statusCode);
+      const code = Number.isInteger(status) && status >= 100 && status <= 599
+        ? status : undefined;
+      const message = details.message ?? upstreamError.message ??
+        details.responseBody ?? 'model request failed';
+      const kind = upstreamError.name ?? 'ModelError';
+      throw failure('OpenCode ' + kind + ': ' + String(message).slice(0, 1200),
+        code === 429 ? 'RATE_LIMIT' : code === 403 ? 'FORBIDDEN' : 'MODEL_ERROR', code);
+    }
     if (!Array.isArray(response?.parts)) {
       throw failure('OpenCode returned no message parts', 'INVALID_RESPONSE');
+    }
+    const text = response.parts.filter((part) => part?.type === 'text')
+      .map((part) => part.text ?? '').join('');
+    if (!text.trim()) {
+      const kinds = response.parts.map((part) => part?.type || '?').join(', ') || 'none';
+      throw failure('OpenCode returned no visible text (part types: ' + kinds +
+        '). Check the OpenCode server logs.', 'EMPTY_RESPONSE');
     }
     if (key) {
       session.count = messages.length;
