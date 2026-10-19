@@ -93,3 +93,31 @@ test('passes DSH attribution to the OpenCode server', async () => {
     messages: [{ role: 'user', content: 'Hi' }] });
   assert.equal(output.parts[0].text, 'ok');
 });
+
+
+test('normal calls wait for automatic startup; local title calls do not launch a service', async () => {
+  let readyCalls = 0;
+  const fetch = async (url) => Response.json(url.endsWith('/session')
+    ? { id: 'session-local' }
+    : { info: { modelID: 'deepseek-v4.1-flash-free' }, parts: [{ type: 'text', text: '1' }] });
+  const adapter = createAdapter({
+    ensureService: async () => { readyCalls++; },
+  }, fetch);
+  const prepared = await adapter.prepareCall('opencode-serve', 'deepseek-v4.1-flash-free');
+  const chunks = [];
+  for await (const chunk of prepared.stream({
+    model: 'deepseek-v4.1-flash-free',
+    messages: [{ role: 'user', content: [{ type: 'text', text: '1' }] }],
+  })) chunks.push(chunk);
+  assert.equal(readyCalls, 1);
+  assert.equal(chunks.find(c => c.type === 'text-delta').text, '1');
+
+  const titleChunks = [];
+  for await (const chunk of prepared.stream({
+    model: 'deepseek-v4.1-flash-free',
+    purpose: 'session-title',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Title' }] }],
+  })) titleChunks.push(chunk);
+  assert.equal(titleChunks.at(-2).block?.text, 'Title');
+  assert.equal(readyCalls, 1, 'local titles never start or probe OpenCode');
+});
