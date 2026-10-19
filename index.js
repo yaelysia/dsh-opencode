@@ -1,4 +1,5 @@
 import Schema from '@deepseek-ai/schemastery';
+import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import { createAdapter, DEFAULT_MODELS } from './src/bridge.js';
 
 export const name = 'dsh-opencode';
@@ -14,10 +15,16 @@ export const Config = Schema.object({
   models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]),
 });
 
+class ModelAdapter extends LlmAdapter {
+  constructor(config) {
+    super();
+    Object.assign(this, createAdapter(config));
+  }
+}
+
 export function apply(ctx, config) {
-  const adapter = createAdapter(config);
   const provider = config.providerId || 'opencode-serve';
-  ctx.llm.registerAdapter([provider], adapter);
+  ctx.llm.registerAdapter([provider], new ModelAdapter(config));
   ctx.llm.registerConfigurableProviders?.([{
     provider,
     displayName: 'OpenCode (official serve)',
