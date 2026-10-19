@@ -2,7 +2,21 @@
 
 通过本地 [OpenCode 官方服务](https://opencode.ai/docs/server/) 接入 DSH 原生模型选择器。
 
-**0.1.4 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+**0.1.5 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+
+## 0.1.5：避免 OpenCode 自带的 Plan/Build 角色提示
+
+上一版使用内置 `plan` agent；OpenCode 会把默认 AI 编程助手角色及 Plan 模式限制一同提供给模型，使 DSH 中的正常聊天出现“当前处于 Plan 模式”之类回答。
+
+0.1.5 默认改成**专用 `dsh-bridge` agent**。插件仅向它自己启动的 OpenCode 子进程设置 `OPENCODE_CONFIG_CONTENT`，注册一个自定义 primary agent：用简短的“遵循本次 system/user 指令、直接回答、不附加 OpenCode 角色和 Plan/Build 流程”提示替换默认角色模板；默认禁止工具执行，保留只读 `read` 兼容权限（免费车道可能需要此类工具声明）。OpenCode 在独立空工作目录中启动，外部文件读取权限仍受限制。DSH 的系统提示通过原有 `system` 字段发送。
+
+配置仅存在于被插件启动的子进程环境中，**不会编辑 OpenCode 全局配置、用户其他工作目录或 DSH 已保存的聊天**。插件现有普通文本对话、标题生成与自动服务管理不变。
+
+**注意：** 自定义 agent 仅替换 OpenCode 的角色模板；官方 `serve` 仍会追加环境等系统上下文，因此不承诺达到完全透明的 raw API。当前插件尚未转发 DSH 工具调用。如果必须完全不经过 OpenCode 提示词组装，需要改用真正的模型接口适配器而不是官方 `serve`。
+
+升级前先完全退出 DSH Desktop，确认 4096 端口没有旧版本 OpenCode 服务占用，然后启动更新后的 DSH。如果使用旧 PowerShell 手工运行的 `opencode serve` 或之前插件留下的服务，那个进程没有 `dsh-bridge` agent：新版会返回 `SERVER_AGENT_MISSING`，不会偷偷使用 `plan`。停止旧服务并让新版插件接管即可。
+
+仅在需要明确保留旧 OpenCode 模式时，手工把插件 `agent` 字段改成 `plan` 或其他已存在的 agent；默认不再使用旧模式。
 
 ## 0.1.4：打开 DSH 后自动运行 OpenCode
 
@@ -85,7 +99,7 @@ node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
 
 已确认独立 OpenCode 可以生成文本后，直接安装/更新插件；0.1.4 无需提前手动启动服务。
 
-**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用下面的 Git 来源安装/更新，确认安装版本为 `0.1.4` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
+**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用下面的 Git 来源安装/更新，确认安装版本为 `0.1.5` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
 
 ```text
 git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
@@ -101,7 +115,7 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 |---|---|---|
 | endpoint | http://127.0.0.1:4096 | 官方本地服务 |
 | providerId / backendProviderId | opencode-serve / opencode | DSH / OpenCode 路由 |
-| agent | plan | OpenCode 内部 agent |
+| agent | dsh-bridge | 独立的 DSH 专用 agent，避免内置 Plan 模式角色提示 |
 | models | 两个默认免费模型 | 可选模型 ID |
 | localTitles | true | DSH 标记为 session-title 的请求使用本地短标题，不调用云端 |
 | timeoutMs | 120000 | 单个本地 HTTP 请求期限 |
