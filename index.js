@@ -1,5 +1,5 @@
 import Schema from '@deepseek-ai/schemastery';
-import { LlmAdapter } from '@deepseek-ai/dsh-llm';
+import { LlmAdapter, attributionHeaders } from '@deepseek-ai/dsh-llm';
 import { createAdapter, DEFAULT_MODELS } from './src/bridge.js';
 
 export const name = 'dsh-opencode';
@@ -18,7 +18,7 @@ export const Config = Schema.object({
 class ModelAdapter extends LlmAdapter {
   constructor(config) {
     super();
-    Object.assign(this, createAdapter(config));
+    Object.assign(this, createAdapter({ ...config, attributionHeaders: attributionHeaders() }));
   }
 }
 
