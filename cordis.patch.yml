@@ -1,0 +1,4 @@
+- insert:
+    - id: opencode-serve
+      name: dsh-opencode
+      config: {}
