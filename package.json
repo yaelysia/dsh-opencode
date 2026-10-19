@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -10,11 +10,10 @@
     "index.js",
     "src",
     "cordis.patch.yml",
-    "README.md",
-    "THIRD_PARTY_NOTICES.md"
+    "README.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test"
   },
   "dsh": {
     "bundle": {
