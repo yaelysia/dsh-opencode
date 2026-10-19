@@ -50,6 +50,7 @@ export class OpenCodeServeClient {
     this.fetchImpl = fetchImpl;
     this.attributionHeaders = config.attributionHeaders ?? {};
     this.logger = config.logger;
+    this.ensureService = config.ensureService;
     this.sessions = new Map();
     this.pending = Promise.resolve();
     this.blocked = null;
@@ -108,6 +109,9 @@ export class OpenCodeServeClient {
   async completeOnce(options) {
     if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
     if (this.blocked && Date.now() < this.blocked.until) throw this.blocked.error;
+    // Startup is on demand too: a user can send immediately after plugin activation.
+    await this.ensureService?.();
+    if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
     const messages = Array.isArray(options?.messages) ? options.messages : [];
     const key = options?.sessionId ? JSON.stringify([
       options.sessionId, options.model, options.purpose ?? 'chat', options.system ?? '',
