@@ -152,7 +152,7 @@ function serverFixture(block = false, missing = false) {
     const send = data => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data)); };
     if (req.url === '/global/health') return send({ healthy: true, version: 'test-only' });
     if (req.url === '/provider') return send({ all: [{ id: 'opencode', secret: 'must-not-appear', models: missing ? {} : Object.fromEntries(DEFAULT_MODELS.map(id => [id, { id }])) }] });
-    if (req.url === '/agent') return send([{ name: 'plan' }]);
+    if (req.url === '/agent') return send([{ name: 'dsh-bridge' }]);
     if (req.url === '/session') return send({ id: 'fixture' });
     if (req.url === '/session/fixture/message') { probes++; return send(block ? networkError() : ok()); }
     res.statusCode = 404; send({ error: { message: 'not found' } });
@@ -200,7 +200,7 @@ test('catalog fallback supports /config/providers only after a real 404', async 
     if (url.endsWith('/global/health')) return Response.json({ healthy: true, version: 'test' });
     if (url.endsWith('/config/providers')) return Response.json({ providers: [{ id: 'opencode', models: { [model]: { id: model } } }] });
     if (url.endsWith('/provider')) return Response.json({ error: { message: 'not found' } }, { status: 404 });
-    return Response.json([{ name: 'plan' }]);
+    return Response.json([{ name: 'dsh-bridge' }]);
   });
   assert.equal(report.ok, true);
   assert.deepEqual(paths, ['/global/health', '/provider', '/config/providers', '/agent']);
