@@ -53,3 +53,9 @@ OpenCode 在 HTTP 200 的 `info.error` 中仍可能返回模型失败；本插�
 3. Wire Trace 不是完整的请求日志。此版本向本地 OpenCode API 发送 DSH 标准 User-Agent，但是否显示还取决于 DSH 捕获器。
 
 如果官方 OpenCode 客户端调用同一免费模型也返回 403，则故障发生在 OpenCode 免费车道，更新 DSH 插件无法解除服务端限制。
+
+### 免费模型网关按出口 IP 拒绝
+
+若 DSH 显示 `FORBIDDEN`，并包含 `OpenCode's free models aren't available from your current network because we've detected abusive traffic from this IP address`，这是 OpenCode 云端免费车道针对出口 IP 的限制，不是 DSH 的 `/models` 404、模型 ID 或本地 `opencode serve` HTTP 协议错误。此类情况下，本地 `/session/:id/message` 返回 HTTP 200，仍可能在响应的 `info.error` 中包含网关拒绝信息。
+
+OpenCode 维护方在 [issue #56853](https://github.com/anomalyco/opencode/issues/56853) 中确认该限制由免费模型网关做出；是否自动过期或解封需官方确认，建议停止异常高频请求、检查是否使用 VPN/代理，并联系 `help@anoma.ly` 申请审核。不要通过修改本插件的请求头或增加重试次数尝试规避 IP 限制。
