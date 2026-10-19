@@ -1,6 +1,7 @@
 import Schema from '@deepseek-ai/schemastery';
 import { LlmAdapter, attributionHeaders } from '@deepseek-ai/dsh-llm';
 import { createAdapter, DEFAULT_MODELS } from './src/bridge.js';
+import { OpenCodeService } from './src/service.js';
 
 export const name = 'opencode-serve';
 export const inject = ['llm'];
@@ -13,6 +14,11 @@ export const Config = Schema.object({
   username: Schema.string().default('opencode'),
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
   localTitles: Schema.boolean().default(true),
+  autoStart: Schema.boolean().default(true),
+  autoStartDirect: Schema.boolean().default(true),
+  opencodeExecutable: Schema.string().default(''),
+  runtimeRoot: Schema.string().default(''),
+  autoStartTimeoutMs: Schema.number().default(15000),
   timeoutMs: Schema.number().default(120000),
   models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]),
 });
@@ -25,12 +31,22 @@ class ModelAdapter extends LlmAdapter {
 }
 
 export function apply(ctx, config) {
+  const supervisor = new OpenCodeService(config, { logger: ctx.logger });
   const provider = config.providerId || 'opencode-serve';
-  ctx.llm.registerAdapter([provider], new ModelAdapter(config, ctx.logger));
+  ctx.llm.registerAdapter([provider], new ModelAdapter({
+    ...config, ensureService: () => supervisor.ready(),
+  }, ctx.logger));
   ctx.llm.registerConfigurableProviders?.([{
     provider,
     displayName: 'OpenCode (official serve)',
     settingsNs: ctx?.fiber?.entry?.options?.id ?? name,
     settingsPath: [],
   }]);
+  // Cordis owns the lifecycle: only stop a process spawned by this instance.
+  ctx.effect(() => {
+    void supervisor.ready().catch(error => {
+      if (!supervisor.closed) ctx.logger.warn?.('dsh-opencode: OpenCode auto-start failed: ' + error.message);
+    });
+    return () => supervisor.dispose();
+  }, 'dsh-opencode: manage local OpenCode server');
 }
