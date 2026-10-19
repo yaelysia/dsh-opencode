@@ -19,7 +19,7 @@ opencode serve --hostname 127.0.0.1 --port 4096
 安装插件：
 
 ```sh
-dsh plugin --profile desktop add github:yaelysia/dsh-opencode
+dsh plugin --profile desktop add "git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider"
 ```
 
 重启 DSH，在模型选择器中寻找 OpenCode (official serve)。
@@ -43,3 +43,13 @@ dsh plugin --profile desktop add github:yaelysia/dsh-opencode
 运行离线测试：`npm test`。
 
 实现遵循 [DSH Bundle 安装规范](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)。
+
+## 排错
+
+OpenCode 在 HTTP 200 的 `info.error` 中仍可能返回模型失败；本插件会将它报告为 DSH 失败并写入 DSH 日志，空文本也不会被当作成功。
+
+1. 检查服务：`Invoke-RestMethod http://127.0.0.1:4096/global/health`。
+2. 在 DSH 新会话中使用模型并观察失败信息；如果出现 `OpenCode APIError`、403 或 `EMPTY_RESPONSE`，检查 OpenCode 官方服务日志。
+3. Wire Trace 不是完整的请求日志。此版本向本地 OpenCode API 发送 DSH 标准 User-Agent，但是否显示还取决于 DSH 捕获器。
+
+如果官方 OpenCode 客户端调用同一免费模型也返回 403，则故障发生在 OpenCode 免费车道，更新 DSH 插件无法解除服务端限制。
