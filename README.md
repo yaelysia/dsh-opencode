@@ -2,7 +2,47 @@
 
 通过本地 [OpenCode 官方服务](https://opencode.ai/docs/server/) 接入 DSH 原生模型选择器。
 
-**0.1.3 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+**0.1.4 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+
+## 0.1.4：打开 DSH 后自动运行 OpenCode
+
+默认启用自动管理。插件加载时首先检查 `http://127.0.0.1:4096/global/health`，已有健康服务会直接复用；否则在端口空闲时从独立安装位置启动 `opencode.exe serve`。启动不弹出额外窗口，无需用户先执行 `scripts/start.mjs`；插件卸载时仅结束它自己启动的进程。
+
+自动启动仅支持 HTTP 127.0.0.1 入口。端口被其他进程占用但不是健康 OpenCode 时返回 `SERVER_PORT_BUSY`；未找到可执行文件时返回 `SERVER_NOT_INSTALLED`。启动期间不自动发送任何免费模型生成请求。
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `autoStart` | `true` | 自动启动或复用本地服务 |
+| `autoStartDirect` | `true` | 仅移除新进程的 HTTP(S)/ALL_PROXY 环境变量，不修改系统代理或 VPN/TUN |
+| `opencodeExecutable` | 空（自动定位） | Windows 默认 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe` |
+| `runtimeRoot` | 空（自动定位） | 默认 `%LOCALAPPDATA%\OpenCodeRuntime` |
+| `autoStartTimeoutMs` | `15000` | 本地启动等待上限（毫秒） |
+
+**更新插件后重启 DSH Desktop。** 如果你之前手动启动的服务仍在运行，新版会复用它。测试自动启动时，先在旧窗口按 Ctrl+C 停止旧服务，再重启 DSH。关闭 DSH 会结束插件启动的 OpenCode，但不会结束手动启动的服务。
+
+## 清理失败的 npm 安装（不影响独立版 OpenCode）
+
+先在 PowerShell 卸载残留 npm 包；再只清理指向 `opencode-ai` 的三个 shim 和旧包目录：
+
+```powershell
+npm uninstall -g opencode-ai
+
+$npmBin = Join-Path $env:APPDATA 'npm'
+$oldPackage = Join-Path $npmBin 'node_modules\opencode-ai'
+foreach ($name in @('opencode', 'opencode.cmd', 'opencode.ps1')) {
+    $shim = Join-Path $npmBin $name
+    if ((Test-Path -LiteralPath $shim) -and
+        (Select-String -LiteralPath $shim -SimpleMatch 'opencode-ai' -Quiet)) {
+        Remove-Item -LiteralPath $shim -Force
+    }
+}
+if (Test-Path -LiteralPath $oldPackage) {
+    Remove-Item -LiteralPath $oldPackage -Recurse -Force
+}
+Get-Command opencode -All -ErrorAction SilentlyContinue
+```
+
+如果仍出现 `EPERM`，先关闭占用旧 npm 目录的程序，必要时重启电脑后重试。不要删除整个 `%APPDATA%\npm`、`%LOCALAPPDATA%\npm-cache`、`%LOCALAPPDATA%\Programs\OpenCodeCLI` 或 `%LOCALAPPDATA%\OpenCodeRuntime`。旧 shim 清理后，独立版 exe 和 DSH 自动启动不受影响。
 
 ## Windows：先做一次独立链路测试
 
@@ -43,9 +83,9 @@ node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
 
 ## 安装 DSH 插件
 
-在 OpenCode 独立测试返回文本之后，再安装/更新插件。
+已确认独立 OpenCode 可以生成文本后，直接安装/更新插件；0.1.4 无需提前手动启动服务。
 
-**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用下面的 Git 来源安装/更新，确认安装版本为 `0.1.3` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
+**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用下面的 Git 来源安装/更新，确认安装版本为 `0.1.4` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
 
 ```text
 git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
