@@ -43,3 +43,53 @@ test('keeps session history without re-sending past user turns', async () => {
   assert.equal(calls[1].payload.parts[0].text, 'First');
   assert.equal(calls[2].payload.parts[0].text, 'Next');
 });
+
+test('embedded model errors in HTTP 200 are reported, not treated as empty success', async () => {
+  const fetch = async (url) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'sess-a' });
+    return Response.json({
+      info: { role: 'assistant', error: {
+        name: 'APIError', data: { statusCode: 403, message: 'Free model is restricted' },
+      }},
+      parts: [],
+    });
+  };
+  const client = new OpenCodeServeClient({}, fetch);
+  await assert.rejects(
+    client.complete({ model: 'deepseek-v4.1-flash-free',
+      messages: [{ role: 'user', content: 'Hi' }] }),
+    (error) => error.code === 'FORBIDDEN'
+      && error.failure.status === 403 && /restricted/.test(error.message),
+  );
+});
+
+test('empty assistant output is reported as an error', async () => {
+  const fetch = async (url) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'sess-a' });
+    return Response.json({ info: { role: 'assistant' }, parts: [
+      { type: 'step-start' }, { type: 'step-finish' },
+    ]});
+  };
+  const client = new OpenCodeServeClient({}, fetch);
+  await assert.rejects(
+    client.complete({ model: 'glm-5.3-flash-free',
+      messages: [{ role: 'user', content: 'Hi' }] }),
+    (error) => error.code === 'EMPTY_RESPONSE'
+      && /step-start/.test(error.message),
+  );
+});
+
+test('passes DSH attribution to the OpenCode server', async () => {
+  const fetch = async (url, init) => {
+    assert.equal(init.headers['user-agent'], 'deepseek-harness/test (+https://example.org)');
+    return Response.json(url.endsWith('/session')
+      ? { id: 'sess-a' } : { info: { role: 'assistant' },
+        parts: [{ type: 'text', text: 'ok' }] });
+  };
+  const client = new OpenCodeServeClient({
+    attributionHeaders: { 'user-agent': 'deepseek-harness/test (+https://example.org)' },
+  }, fetch);
+  const output = await client.complete({ model: 'glm-5.3-flash-free',
+    messages: [{ role: 'user', content: 'Hi' }] });
+  assert.equal(output.parts[0].text, 'ok');
+});
