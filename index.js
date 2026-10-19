@@ -16,15 +16,15 @@ export const Config = Schema.object({
 });
 
 class ModelAdapter extends LlmAdapter {
-  constructor(config) {
+  constructor(config, logger) {
     super();
-    Object.assign(this, createAdapter({ ...config, attributionHeaders: attributionHeaders() }));
+    Object.assign(this, createAdapter({ ...config, logger, attributionHeaders: attributionHeaders() }));
   }
 }
 
 export function apply(ctx, config) {
   const provider = config.providerId || 'opencode-serve';
-  ctx.llm.registerAdapter([provider], new ModelAdapter(config));
+  ctx.llm.registerAdapter([provider], new ModelAdapter(config, ctx.logger));
   ctx.llm.registerConfigurableProviders?.([{
     provider,
     displayName: 'OpenCode (official serve)',
