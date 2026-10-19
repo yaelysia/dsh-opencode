@@ -18,9 +18,11 @@ async function externalServer(handler) {
     close: () => new Promise(resolve => server.close(resolve)) };
 }
 
-const healthy = (_req, res) => {
+const healthy = (req, res) => {
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ healthy: true, version: '1.19.3' }));
+  res.end(JSON.stringify(req.url === '/agent'
+    ? [{ name: 'dsh-bridge' }, { name: 'plan' }]
+    : { healthy: true, version: '1.19.3' }));
 };
 
 test('only loopback HTTP root is eligible for auto-management', () => {
@@ -78,7 +80,7 @@ test('automatically starts real local child and stops only the owned process', a
   const fixture = path.join(root, 'fake-service.mjs');
   await writeFile(fixture, [
     "import { createServer } from 'node:http';",
-    "createServer((_req,res) => { res.setHeader('content-type','application/json'); res.end(JSON.stringify({healthy:true,version:'test'})); })",
+    "createServer((req,res) => { res.setHeader('content-type','application/json'); res.end(JSON.stringify(req.url==='/agent'?[{name:'dsh-bridge'}]:{healthy:true,version:'test'})); })",
     "  .listen(Number(process.argv[2]), '127.0.0.1');",
   ].join('\n'));
   const reservation = await externalServer(healthy);
@@ -126,4 +128,21 @@ test('autoStart=false preserves manual service mode', async () => {
     { spawnImpl: () => { throw Error('unexpected spawn'); } });
   await manager.ready();
   await manager.dispose();
+});
+
+
+test('healthy external server without DSH agent fails instead of using Plan mode', async () => {
+  const external = await externalServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(req.url === '/agent'
+      ? [{ name: 'plan' }, { name: 'build' }]
+      : { healthy: true, version: '1.19.3' }));
+  });
+  try {
+    const manager = new OpenCodeService({ endpoint: external.url },
+      { spawnImpl: () => { throw Error('must not spawn over existing service'); }, logger: { info() {} } });
+    await assert.rejects(manager.ready(), error => error.code === 'SERVER_AGENT_MISSING');
+    await manager.dispose();
+    assert.equal((await fetch(external.url + '/global/health')).ok, true);
+  } finally { await external.close(); }
 });
