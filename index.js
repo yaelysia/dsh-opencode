@@ -2,6 +2,7 @@ import Schema from '@deepseek-ai/schemastery';
 import { LlmAdapter, attributionHeaders } from '@deepseek-ai/dsh-llm';
 import { createAdapter, DEFAULT_MODELS } from './src/bridge.js';
 import { OpenCodeService } from './src/service.js';
+import { BRIDGE_AGENT_ID } from './src/managed-agent.js';
 
 export const name = 'opencode-serve';
 export const inject = ['llm'];
@@ -10,7 +11,7 @@ export const Config = Schema.object({
   endpoint: Schema.string().default('http://127.0.0.1:4096'),
   backendProviderId: Schema.string().default('opencode'),
   providerId: Schema.string().default('opencode-serve'),
-  agent: Schema.string().default('plan'),
+  agent: Schema.string().default(BRIDGE_AGENT_ID),
   username: Schema.string().default('opencode'),
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
   localTitles: Schema.boolean().default(true),
