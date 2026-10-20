@@ -153,12 +153,12 @@ test('form field parsers reject malformed values before persisting', () => {
   };
   exports.apply(ctx);
   const specs = created[0].specs;
-  assert.deepEqual(specs.guardedReadCompatibility.parse('true'), { kind: 'set', value: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.guardedReadCompatibility.parse('true'))), { kind: 'set', value: true });
   assert.equal(specs.guardedReadCompatibility.parse('maybe'), undefined);
-  assert.deepEqual(specs.timeoutMs.parse(''), { kind: 'clear' });
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.timeoutMs.parse(''))), { kind: 'clear' });
   assert.equal(specs.timeoutMs.parse('-3'), undefined);
   assert.equal(specs.timeoutMs.parse('1.5'), undefined);
   assert.equal(specs.timeoutMs.parse('Infinity'), undefined);
-  assert.deepEqual(specs.models.parse('model-a\nmodel-b'), { kind: 'set', value: ['model-a','model-b'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.models.parse('model-a\nmodel-b'))), { kind: 'set', value: ['model-a','model-b'] });
   assert.equal(specs.models.parse('model-a\nmodel-a'), undefined);
 });
