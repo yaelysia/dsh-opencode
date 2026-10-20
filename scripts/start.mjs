@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { diagnose, proxySummary } from './doctor.mjs';
 import { redact } from '../src/errors.js';
-import { childEnvironment } from '../src/service-env.js';
+import { childEnvironment, secureServerEnvironment } from '../src/service-env.js';
 import { BRIDGE_AGENT_ID, managedAgentEnvironment } from '../src/managed-agent.js';
 export { childEnvironment } from '../src/service-env.js';
 
@@ -32,7 +32,9 @@ export async function main(args = process.argv.slice(2)) {
   const root = path.resolve(values.root || path.join(local || process.cwd(), 'OpenCodeRuntime'));
   await access(exe);
   await ensurePortFree(port);
-  const env = managedAgentEnvironment(childEnvironment(process.env, root, values.direct), BRIDGE_AGENT_ID, root);
+  const env = secureServerEnvironment(managedAgentEnvironment(
+    childEnvironment(process.env, root, values.direct), BRIDGE_AGENT_ID, root,
+  ));
   for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
     await mkdir(env[key], { recursive: true });
   }
@@ -68,7 +70,8 @@ export async function main(args = process.argv.slice(2)) {
       throw new Error('OpenCode did not become healthy; check its output above');
     })();
     await Promise.race([ready, exited.then(({ code }) => { throw new Error('OpenCode exited before becoming ready: ' + code); })]);
-    const report = await diagnose({ endpoint, probe: values.probe, model: values.model, env });
+    const report = await diagnose({ endpoint, probe: values.probe, model: values.model, env,
+      passwordProvider: () => password, username: env.OPENCODE_SERVER_USERNAME });
     report.launch = { directRequested: values.direct, systemVpnChanged: false };
     const file = path.join(root, 'opencode-diagnostic-' + Date.now() + '.json');
     await writeFile(file, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });

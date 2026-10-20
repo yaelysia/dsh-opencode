@@ -11,7 +11,7 @@
 ### 安全约束
 
 - 只在插件自己启动的 OpenCode 子进程中启用 `dsh-bridge`，将**所有 agent 的 OpenCode 原生工具权限统一设置为 `* = deny`**。隔离子进程的 OpenCode 配置目录，禁止继承项目配置、普通 OpenCode 插件和 MCP；只保留既有数据/鉴权目录。不会改用户全局设置。
-- 为本地 OpenCode 服务生成仅存在于插件进程内的随机 Basic Auth 密码，未经认证的 `127.0.0.1:4096` 请求会返回 401。出于安全考虑，新的 Desktop 自动服务不能再用无认证的 `Invoke-RestMethod .../global/health` 直接测试。
+- 托管服务及手动诊断脚本均生成独立随机 Basic Auth 密码，未经认证的 `127.0.0.1:4096` 请求会返回 401。出于安全考虑，新的 Desktop 自动服务不能再用无认证的 `Invoke-RestMethod .../global/health` 直接测试。
 - `agent` 固定为 `dsh-bridge`：托管服务和模型适配器均拒绝内置 `plan`/`build` 或任意自定义 Agent（`BRIDGE_AGENT_REQUIRED`），防止通过配置绕开原生工具权限隔离。托管服务每次生成新的随机 Basic Auth 密码，不使用父进程既有的密码；`passwordEnv` 仅用于连接外部手动启动的服务，托管子进程始终通过 OpenCode 官方的 `OPENCODE_SERVER_PASSWORD` 环境变量接收随机凭据。
 - `strictOwnedServer` 默认开启：**不允许模型请求复用未经插件管理的既有 OpenCode 进程**，避免那个进程带有不受控的权限或插件。要切换新版本，先停止旧的 `opencode serve`，再重启 DSH Desktop。
 - 对 DSH 传入的每个工具名称做精确白名单检查。模型的格式错误、未声明工具、截断工具请求，以及 OpenCode 服务返回的任何原生工具事件都被标记为失败，不会提交为一个“成功调用”。
@@ -45,7 +45,7 @@
 
 配置仅存在于被插件启动的子进程环境中，**不会编辑 OpenCode 全局配置、用户其他工作目录或 DSH 已保存的聊天**。插件现有普通文本对话、标题生成与自动服务管理不变。
 
-**注意：** 自定义 agent 仅替换 OpenCode 的角色模板；官方 `serve` 仍会追加环境等系统上下文，因此不承诺达到完全透明的 raw API。当前插件尚未转发 DSH 工具调用。如果必须完全不经过 OpenCode 提示词组装，需要改用真正的模型接口适配器而不是官方 `serve`。
+**注意：** 自定义 agent 仅替换 OpenCode 的角色模板；官方 `serve` 仍会追加环境等系统上下文，因此不承诺达到完全透明的 raw API。当前版本通过实验性文本协议转发 DSH 工具调用，仍需 Desktop 联测验证。如果必须完全不经过 OpenCode 提示词组装，需要改用真正的模型接口适配器而不是官方 `serve`。
 
 升级前先完全退出 DSH Desktop，确认 4096 端口没有旧版本 OpenCode 服务占用，然后启动更新后的 DSH。如果使用旧 PowerShell 手工运行的 `opencode serve` 或之前插件留下的服务，那个进程没有 `dsh-bridge` agent：新版会返回 `SERVER_AGENT_MISSING`，不会偷偷使用 `plan`。停止旧服务并让新版插件接管即可。
 

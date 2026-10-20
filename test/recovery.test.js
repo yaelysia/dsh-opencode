@@ -7,6 +7,7 @@ import { OpenCodeServeClient, createAdapter, DEFAULT_MODELS } from '../src/bridg
 import { providerFailure, redact } from '../src/errors.js';
 import { diagnose, proxySummary } from '../scripts/doctor.mjs';
 import { childEnvironment, ensurePortFree } from '../scripts/start.mjs';
+import { secureServerEnvironment } from '../src/service-env.js';
 
 const model = DEFAULT_MODELS[0];
 const call = (extras = {}) => ({ model, sessionId: 'a', messages: [{ role: 'user', content: 'Hello' }], ...extras });
@@ -243,4 +244,34 @@ test('a queued cancellation settles before the preceding request completes', { t
     await assert.rejects(second, e => e.code === 'ABORTED');
     assert.equal(tx.calls.length, 2);
   } finally { release(); await first; }
+});
+
+test('local diagnostics always launch with fresh canonical OpenCode credentials', () => {
+  const inherited = { OPENCODE_SERVER_PASSWORD: 'stale-secret',
+    OPENCODE_SERVER_USERNAME: 'inherited-user', CUSTOM_DSH_PASSWORD: 'another-secret' };
+  const child = secureServerEnvironment(inherited, {
+    password: 'a'.repeat(64), username: 'bridge-user', passwordEnv: 'CUSTOM_DSH_PASSWORD',
+  });
+  assert.equal(child.OPENCODE_SERVER_PASSWORD, 'a'.repeat(64));
+  assert.equal(child.OPENCODE_SERVER_USERNAME, 'bridge-user');
+  assert.equal(child.CUSTOM_DSH_PASSWORD, undefined);
+  assert.equal(inherited.OPENCODE_SERVER_PASSWORD, 'stale-secret');
+  assert.match(secureServerEnvironment(inherited).OPENCODE_SERVER_PASSWORD, /^[a-f0-9]{64}$/);
+  assert.throws(() => secureServerEnvironment(inherited, { password: 'weak' }), /32-byte random/);
+});
+
+test('doctor can authenticate against independently launched managed diagnostics', async () => {
+  const secret = 'f'.repeat(64);
+  const report = await diagnose({
+    passwordProvider: () => secret, username: 'diag-user', probe: false,
+  }, async (url, init) => {
+    assert.equal(init.headers.authorization,
+      'Basic ' + Buffer.from('diag-user:' + secret).toString('base64'));
+    if (url.endsWith('/global/health')) return Response.json({ healthy: true, version: 'test' });
+    if (url.endsWith('/provider')) return Response.json({
+      all: [{ id: 'opencode', models: { [model]: { id: model } } }],
+    });
+    return Response.json([{ name: 'dsh-bridge' }]);
+  });
+  assert.equal(report.ok, true);
 });
