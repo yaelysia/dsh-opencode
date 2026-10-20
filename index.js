@@ -24,8 +24,8 @@ export const Config = Schema.object({
   autoStartDirect: Schema.boolean().default(true).volatile(),
   opencodeExecutable: Schema.string().default('').volatile(),
   runtimeRoot: Schema.string().default('').volatile(),
-  autoStartTimeoutMs: Schema.number().default(15000).volatile(),
-  timeoutMs: Schema.number().default(120000).volatile(),
+  autoStartTimeoutMs: Schema.number().min(1).max(2147483647).default(15000).volatile(),
+  timeoutMs: Schema.number().min(1).max(2147483647).default(120000).volatile(),
   models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]).volatile(),
 });
 

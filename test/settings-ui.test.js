@@ -162,3 +162,30 @@ test('form field parsers reject malformed values before persisting', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(specs.models.parse('model-a\nmodel-b'))), { kind: 'set', value: ['model-a','model-b'] });
   assert.equal(specs.models.parse('model-a\nmodel-a'), undefined);
 });
+
+test('configuration page blocks an invalid guarded-read and auto-start combination', () => {
+  const { exports, created } = loadClient();
+  let registration;
+  const ctx = {
+    effect(fn) { fn(); },
+    locale: { bind: () => x => x, register: () => () => {} },
+    configForms: {
+      get: () => ({ getSnapshot: () => ({ value: { guardedReadCompatibility: false, autoStart: true } }) }),
+      whileServed: (_ids, register) => register(),
+    },
+    slots: { inject: (_slot, register) => register(), register: opts => {
+      registration = opts; return () => {};
+    } },
+  };
+  exports.apply(ctx);
+  const face = registration.inject();
+  face.edit('guardedReadCompatibility', 'true');
+  face.edit('autoStart', 'false');
+  let state = face.hooks.opencodeSettings.getSnapshot();
+  assert.equal(state.guardConflict, true);
+  assert.equal(state.invalid, true);
+  face.edit('autoStart', 'true');
+  state = face.hooks.opencodeSettings.getSnapshot();
+  assert.equal(state.guardConflict, false);
+  assert.equal(state.invalid, false);
+});

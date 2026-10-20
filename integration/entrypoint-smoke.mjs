@@ -164,3 +164,8 @@ test('settings are exposed as DSH Volatile references and snapshotted for server
   assert.equal(typeof options.timeoutMs, 'number');
   assert.equal(typeof options.providerId, 'string');
 });
+
+test('settings schema refuses invalid model and startup timeout values before persistence', () => {
+  assert.throws(() => Config({ timeoutMs: -1 }));
+  assert.throws(() => Config({ autoStartTimeoutMs: 0 }));
+});
