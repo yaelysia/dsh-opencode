@@ -300,3 +300,38 @@ test('real DSH BlockAssembler verifies a pending SSE native tool from OpenCode h
   assert.deepEqual(JSON.parse(assembler.message({ provider, model }).content[0].arguments),
     { file_path: 'file.txt' });
 });
+
+test('published DSH BlockAssembler accepts imperfect DeepSeek textual glob envelope', async () => {
+  const model = 'deepseek-v4.1-flash-free';
+  const provider = 'opencode-serve';
+  const generated = '先查看工作区有什么文件。\n'
+    + '工作区是 C:\\Users\\Administrator\\Documents\\dsh. DSH_TOOL_CALL_V1:\n'
+    + '{"name":"glob","pattern":"**/*.txt","path":"C:\\Users\\Administrator\\Documents\\dsh"}';
+  let requests = 0;
+  const mock = async (url) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'imperfect-envelope' });
+    requests++;
+    return Response.json({ info: { modelID: model },
+      parts: [{ type: 'text', text: generated }] });
+  };
+  const adapter = createAdapter({ ssePreviewEnabled: false }, mock);
+  const prepared = await adapter.prepareCall(provider, model);
+  const assembled = new BlockAssembler();
+  for await (const chunk of prepared.stream({
+    provider, model,
+    tools: [{ name: 'glob', description: 'DSH-owned file discovery', parameters: {
+      type: 'object', properties: {
+        pattern: { type: 'string', required: true }, path: { type: 'string' },
+      },
+    } }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: '找工作区的文本文件' }] }],
+  })) assembled.push(chunk);
+  assert.equal(requests, 1, 'malformed-but-unambiguous tool JSON must not trigger a retry');
+  assert.equal(assembled.finish.kind, 'tool-calls');
+  const call = assembled.message({ provider, model }).content[0];
+  assert.equal(call.type, 'tool-call');
+  assert.equal(call.name, 'glob');
+  assert.deepEqual(JSON.parse(call.arguments), {
+    pattern: '**/*.txt', path: 'C:\\Users\\Administrator\\Documents\\dsh',
+  });
+});

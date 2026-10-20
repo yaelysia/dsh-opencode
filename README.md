@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.11`（工具交接改为权威历史校验）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.12`（DSH 文本工具协议容错与安全校验）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -25,6 +25,7 @@ DSH Agent
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
 - **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
+- **文本工具协议容错**：对唯一、完整且位于回复末尾的 `DSH_TOOL_CALL_V1:` 请求，允许模型先输出一段说明；若模型把 `pattern/path/file_path` 等参数直接放在顶层，只有在这些字段全部属于本轮 DSH 工具 Schema 且必填项齐全时，才恢复为标准 `arguments` 对象。对双引号路径字段中不规范的 Windows 单反斜杠进行最小转义修正，已正确转义的路径保持不变。多重工具标记、未声明工具、额外字段及无法确定的 JSON 仍拒绝，绝不跳过 DSH 授权。SSE 允许先显示说明文字，但不会把工具 JSON 当作自然语言流式展示。
 - **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。
 - **被拦截工具证明**：受保护兼容模式的 OpenCode 子进程会在 `tool.execute.before` 拒绝原生工具前，追加只含随机启动证明、Session ID、调用 ID 和工具名的本地审计记录。即使 OpenCode 将异常包装成通用错误，桥接也仅在核实该拒绝记录、工具最终状态为 `error` 且不存在执行证据后，才能将其转交 DSH；没有证明仍拒绝。审计不存储工具参数或文件内容，退出时清理。
 - 如果最终状态已确认为 `error` 且启动守卫审计验证成功，不再额外要求 OpenCode 必须提供字符串格式的异常正文；仍严格拒绝 `completed`、`providerExecuted` 和无守卫证明的事件。

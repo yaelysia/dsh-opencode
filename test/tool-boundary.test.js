@@ -478,3 +478,91 @@ test('a briefly missing final assistant message is retried without resending the
   assert.equal(reads, 2);
   assert.equal(prompts, 1);
 });
+
+const globDeclaration = [{
+  name: 'glob', description: 'Find files in the DSH workspace',
+  parameters: { type: 'object', properties: {
+    pattern: { type: 'string', required: true },
+    path: { type: 'string' },
+  } },
+}];
+
+test('recovers the screenshot shape: prelude, flat glob args and unescaped Windows path', () => {
+  const fromModel = 'First inspect the workspace.\n'
+    + 'Use the declared DSH glob tool.\n'
+    + 'Workspace is C:\\Users\\Administrator\\Documents\\dsh. DSH_TOOL_CALL_V1:\n'
+    + '{"name":"glob","pattern":"**/*.txt","path":"C:\\Users\\Administrator\\Documents\\dsh"}';
+  const call = parseToolRequest(fromModel, globDeclaration);
+  assert.equal(call.name, 'glob');
+  assert.deepEqual(JSON.parse(call.arguments), {
+    pattern: '**/*.txt', path: 'C:\\Users\\Administrator\\Documents\\dsh',
+  });
+  assert.match(call.id, /^call_/);
+});
+
+test('correctly escaped Windows paths and \n-like segments are preserved', () => {
+  const correctlyEscaped = TOOL_CALL_PREFIX + JSON.stringify({
+    name: 'glob', arguments: { pattern: '**/*.txt', path: 'C:\\new\\test' },
+  });
+  assert.deepEqual(JSON.parse(parseToolRequest(correctlyEscaped, globDeclaration).arguments),
+    { pattern: '**/*.txt', path: 'C:\\new\\test' });
+  const malformed = TOOL_CALL_PREFIX
+    + '{"name":"glob","pattern":"**/*.txt","path":"C:\\new\\test"}';
+  assert.deepEqual(JSON.parse(parseToolRequest(malformed, globDeclaration).arguments),
+    { pattern: '**/*.txt', path: 'C:\\new\\test' });
+});
+
+test('flat arguments are limited to the declared DSH schema and required fields', () => {
+  const call = o => parseToolRequest(TOOL_CALL_PREFIX + JSON.stringify(o), globDeclaration);
+  assert.deepEqual(JSON.parse(call({ name: 'glob', pattern: '**/*.txt', path: '.' }).arguments),
+    { pattern: '**/*.txt', path: '.' });
+  assert.throws(() => call({ name: 'glob', pattern: '*.txt', command: 'Remove-Item *' }),
+    error => error.code === 'INVALID_TOOL_CALL');
+  assert.throws(() => call({ name: 'glob', path: '.' }),
+    error => error.code === 'INVALID_TOOL_CALL');
+  assert.throws(() => call({ name: 'pwsh', command: 'whoami' }),
+    error => error.code === 'UNDECLARED_TOOL_CALL');
+  assert.throws(() => call({
+    name: 'glob', arguments: { pattern: '*' }, path: '.',
+  }), error => error.code === 'INVALID_TOOL_CALL');
+  assert.deepEqual(JSON.parse(call({ name: 'glob', arguments: { pattern: '*' } }).arguments),
+    { pattern: '*' }, 'canonical envelope remains supported');
+});
+
+test('quoted examples, trailing prose and multiple requests are never executed', () => {
+  const valid = TOOL_CALL_PREFIX + '{"name":"glob","arguments":{"pattern":"*.txt"}}';
+  assert.equal(parseToolRequest('Example: ' + valid, globDeclaration), null);
+  const fence = String.fromCharCode(96).repeat(3);
+  assert.equal(parseToolRequest(fence + 'json\n' + valid + '\n' + fence, globDeclaration), null);
+  assert.throws(() => parseToolRequest('First.\n' + valid + '\nSecond.\n' + valid,
+    globDeclaration), error => error.code === 'INVALID_TOOL_CALL');
+  assert.throws(() => parseToolRequest('Find files.\n' + valid + '\nFinished.',
+    globDeclaration), error => error.code === 'INVALID_TOOL_CALL');
+  assert.throws(() => parseToolRequest(TOOL_CALL_PREFIX + '{"name":"glob","pattern":"',
+    globDeclaration), error => error.code === 'INVALID_TOOL_CALL');
+  assert.equal(parseToolRequest('Ordinary response, no tool requested.', globDeclaration), null);
+});
+
+test('invalid flat tool response never falls through to ordinary text', async () => {
+  const server = mockServer([[{ type: 'text', text:
+    'I will search.\n' + TOOL_CALL_PREFIX + '{"name":"glob","pattern":"*.txt","unknown":"value"}' }]]);
+  const adapter = createAdapter({ ssePreviewEnabled: false }, server.fetch);
+  await assert.rejects(() => getChunks(adapter, [user], globDeclaration),
+    error => error.code === 'INVALID_TOOL_CALL');
+});
+
+test('imperfect DSH tool envelope becomes a DSH tool-call through the adapter', async () => {
+  const output = 'Look for text files first.\n'
+    + 'The workspace is C:\\Users\\Administrator\\Documents\\dsh. DSH_TOOL_CALL_V1:\n'
+    + '{"name":"glob","pattern":"**/*.txt","path":"C:\\Users\\Administrator\\Documents\\dsh"}';
+  const server = mockServer([[{ type: 'text', text: output }]]);
+  const adapter = createAdapter({ ssePreviewEnabled: false }, server.fetch);
+  const chunks = await getChunks(adapter, [user], globDeclaration);
+  assert.deepEqual(chunks.map(item => item.type),
+    ['block-start', 'tool-call-delta', 'block-end', 'finish']);
+  assert.equal(chunks[1].name, 'glob');
+  assert.deepEqual(JSON.parse(chunks[1].argumentsDelta), {
+    pattern: '**/*.txt', path: 'C:\\Users\\Administrator\\Documents\\dsh',
+  });
+  assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
+});

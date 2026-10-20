@@ -548,3 +548,32 @@ test('an SSE executed-tool event cannot be rewritten as a harmless guard denial'
   upstream.finish();
   await task;
 });
+
+test('SSE never exposes textual tool JSON even after a commentary prelude', async () => {
+  const raw = '{"name":"glob","pattern":"**/*.txt","path":"C:\\Users\\Administrator\\Documents\\dsh"}';
+  const prelude = '我先检查工作区。\n';
+  const upstream = fixture({ responseText: prelude + 'DSH_TOOL_CALL_V1:' + raw,
+    plan({ send }) {
+      send('message.part.updated', { sessionID, part: textPart(prelude) });
+      send('message.part.delta', { sessionID, messageID: assistantID,
+        partID, field: 'text', delta: 'DSH_TO' });
+      send('message.part.delta', { sessionID, messageID: assistantID,
+        partID, field: 'text', delta: 'OL_CALL_V1:' + raw });
+    },
+  });
+  const tool = [{ name: 'glob', description: 'DSH file search',
+    parameters: { type: 'object', properties: {
+      pattern: { type: 'string', required: true }, path: { type: 'string' },
+    } } }];
+  const pending = consume(await start(createAdapter({ ssePreviewEnabled: true },
+    upstream.fetch), { tools: tool }));
+  await upstream.posted;
+  await sleep(25);
+  upstream.finish();
+  const chunks = await pending;
+  const visible = chunks.filter(x => x.type === 'text-delta').map(x => x.text).join('');
+  assert.equal(visible, prelude);
+  assert.doesNotMatch(visible, /DSH_TOOL_CALL_V1|pattern|Users/);
+  assert.equal(chunks.find(x => x.type === 'tool-call-delta')?.name, 'glob');
+  assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
+});

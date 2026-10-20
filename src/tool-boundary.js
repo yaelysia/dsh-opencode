@@ -42,6 +42,15 @@ export function toolInstructions(tools) {
       'When a shell is genuinely needed, omit workdir to use the DSH session workspace',
       'unless the user explicitly requests a different directory.',
     ] : []),
+    'If requesting a DSH tool, the ONLY allowed JSON shape is',
+    '{"name":"declared_tool_name","arguments":{"declared_key":"value"}}.',
+    'All tool parameters (including pattern/path/file_path) MUST be nested under "arguments".',
+    'Never put pattern/path/file_path beside "name" in the top-level object.',
+    'Use relative workspace paths (such as "." or "text.txt") when possible.',
+    ...(names.has('glob') ? [
+      'Correct glob example: ' + TOOL_CALL_PREFIX
+        + JSON.stringify({ name: 'glob', arguments: { pattern: '**/*.txt', path: '.' } }),
+    ] : []),
     'To request exactly ONE tool call, your ENTIRE assistant response MUST be one line:',
     TOOL_CALL_PREFIX + '{"name":"exact_tool_name","arguments":{"key":"value"}}',
     'Use strictly valid JSON with an arguments object. Do not use Markdown fences or extra text.',
@@ -63,28 +72,83 @@ export function assertNoOpenCodeToolParts(parts) {
   }
 }
 
-/** Parse an explicit text protocol; never execute a tool in this module. */
+/** Repair only double-quoted Windows *path* values, not arbitrary JSON.
+ * Models often emit C:\Users\... even though JSON requires C:\\Users\\...
+ * This keeps already-correct escapes intact and cannot rewrite file content. */
+function escapeWindowsPathValues(raw) {
+  return raw.replace(
+    /("(?:path|file_path|filePath|workdir|directory)"\s*:\s*")([A-Za-z]:\\[^"\r\n]*)(")/g,
+    (_match, head, value, tail) =>
+      head + value.replace(/\\+/g, slashes => '\\'.repeat(2 * Math.ceil(slashes.length / 2))) + tail,
+  );
+}
+
+function flattenedArguments(value, declared) {
+  const properties = declared.parameters?.properties;
+  if (!object(properties)) {
+    throw failure('Cannot normalize a tool call without a declared object schema', 'INVALID_TOOL_CALL');
+  }
+  const args = Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'name'));
+  if (Object.keys(args).some(key => !Object.hasOwn(properties, key))) {
+    throw failure('Model tool-call contains arguments not declared by DSH', 'INVALID_TOOL_CALL');
+  }
+  const required = [
+    ...(Array.isArray(declared.parameters.required) ? declared.parameters.required : []),
+    ...Object.entries(properties).filter(([, item]) => item?.required === true)
+      .map(([name]) => name),
+  ];
+  if (required.some(key => !Object.hasOwn(args, key))) {
+    throw failure('Model tool-call is missing a required DSH argument', 'INVALID_TOOL_CALL');
+  }
+  return args;
+}
+
+/** Parse the one explicit DSH tool request at the END of a model response.
+ * The model may narrate its plan first or omit the "arguments" wrapper.
+ * Recovery is limited to declared DSH field names; no tool is executed here. */
 export function parseToolRequest(output, tools) {
   const text = String(output || '').trim();
-  if (!text.startsWith(TOOL_CALL_PREFIX)) return null;
+  const at = text.indexOf(TOOL_CALL_PREFIX);
+  if (at < 0) return null;
+  // Do not treat a quoted protocol example as an executable tool request.
+  // Permit a standalone marker or one following a complete sentence/paragraph.
+  if (at > 0) {
+    const prelude = text.slice(0, at);
+    const currentLine = prelude.slice(prelude.lastIndexOf('\n') + 1).trim();
+    if (currentLine && !/[.!?。！？]$/.test(currentLine)) return null;
+    if ((prelude.match(/```/g) || []).length % 2) return null;
+  }
+  if (text.indexOf(TOOL_CALL_PREFIX, at + TOOL_CALL_PREFIX.length) >= 0) {
+    throw failure('Ambiguous multiple DSH tool requests in one response', 'INVALID_TOOL_CALL');
+  }
   if (!Array.isArray(tools) || tools.length === 0) {
     throw failure('Tool call requested when DSH offered no tools', 'UNDECLARED_TOOL_CALL');
   }
-  const raw = text.slice(TOOL_CALL_PREFIX.length).trim();
-  if (!raw || Buffer.byteLength(raw, 'utf8') > MAX_CALL_BYTES) {
+  const raw = text.slice(at + TOOL_CALL_PREFIX.length).trim();
+  if (!raw.startsWith('{') || Buffer.byteLength(raw, 'utf8') > MAX_CALL_BYTES) {
     throw failure('Model tool-call payload is empty or oversized', 'INVALID_TOOL_CALL');
   }
   let value;
-  try { value = JSON.parse(raw); }
+  try { value = JSON.parse(escapeWindowsPathValues(raw)); }
   catch { throw failure('Model tool-call payload is not valid JSON', 'INVALID_TOOL_CALL'); }
-  if (!object(value) || typeof value.name !== 'string' || !object(value.arguments)
-    || Object.keys(value).some(key => key !== 'name' && key !== 'arguments')) {
+  if (!object(value) || typeof value.name !== 'string') {
     throw failure('Model tool-call payload does not match the DSH envelope', 'INVALID_TOOL_CALL');
   }
-  if (!tools.some(tool => tool.name === value.name)) {
+  const declared = tools.find(tool => tool.name === value.name);
+  if (!declared) {
     throw failure('Model called a tool not declared by DSH', 'UNDECLARED_TOOL_CALL');
   }
-  return { id: 'call_' + randomUUID(), name: value.name, arguments: JSON.stringify(value.arguments) };
+  let args;
+  if (Object.hasOwn(value, 'arguments')) {
+    if (!object(value.arguments) || Object.keys(value)
+      .some(key => key !== 'name' && key !== 'arguments')) {
+      throw failure('Model tool-call payload does not match the DSH envelope', 'INVALID_TOOL_CALL');
+    }
+    args = value.arguments;
+  } else {
+    args = flattenedArguments(value, declared);
+  }
+  return { id: 'call_' + randomUUID(), name: value.name, arguments: JSON.stringify(args) };
 }
 
 

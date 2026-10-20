@@ -452,20 +452,28 @@ export function createAdapter(config = {}, fetchImpl) {
             // response per token (which would use quadratic queue memory).
             lastSnapshot += item.text;
             const snapshot = lastSnapshot;
-            // A partial tool envelope must never be visible or dispatched.
-            const candidate = snapshot.trimStart();
-            if (!candidate || TOOL_CALL_PREFIX.startsWith(candidate)
-              || candidate.startsWith(TOOL_CALL_PREFIX)) continue;
-            if (!snapshot.startsWith(streamed)) continue;
+            // The model may narrate before a DSH_TOOL_CALL_V1 envelope.
+            // Stream that narration, but never expose tool JSON or a partial
+            // marker; hold the marker until the authoritative final parse.
+            const marker = snapshot.indexOf(TOOL_CALL_PREFIX);
+            let visible = marker >= 0 ? snapshot.slice(0, marker) : snapshot;
+            if (marker < 0) {
+              for (let n = Math.min(TOOL_CALL_PREFIX.length - 1, visible.length); n > 0; n--) {
+                if (visible.endsWith(TOOL_CALL_PREFIX.slice(0, n))) {
+                  visible = visible.slice(0, -n);
+                  break;
+                }
+              }
+            }
+            if (!visible.trim() || !visible.startsWith(streamed)) continue;
+            const delta = visible.slice(streamed.length);
+            if (!delta) continue;
             if (!textStarted) {
               yield { type: 'block-start', index: 0, blockType: 'text' };
               textStarted = true;
             }
-            const delta = snapshot.slice(streamed.length);
-            if (delta) {
-              yield { type: 'text-delta', index: 0, text: delta };
-              streamed = snapshot;
-            }
+            yield { type: 'text-delta', index: 0, text: delta };
+            streamed = visible;
             continue;
           }
           const response = item.response;
