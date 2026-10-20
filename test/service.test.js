@@ -81,7 +81,7 @@ test('automatically starts real local child and stops only the owned process', a
   await writeFile(fixture, [
     "import { createServer } from 'node:http';",
     "createServer((req,res) => {",
-    "const expected = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64');",
+    "const expected = 'Basic ' + Buffer.from(process.env.OPENCODE_SERVER_USERNAME + ':' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64');",
     "if (req.headers.authorization !== expected) { res.statusCode = 401; res.end('unauthorized'); return; }",
     "res.setHeader('content-type','application/json');",
     "res.end(JSON.stringify(req.url==='/agent'?[{name:'dsh-bridge'}]:{healthy:true,version:'test'})); })",
@@ -95,12 +95,13 @@ test('automatically starts real local child and stops only the owned process', a
     manager = new OpenCodeService({
       endpoint: 'http://127.0.0.1:' + port, runtimeRoot: root,
       opencodeExecutable: process.execPath, autoStartDirect: true,
+      username: 'bridge-user', passwordEnv: 'CUSTOM_DSH_PASSWORD',
     }, { argsImpl: port => [fixture, String(port)], logger: { info() {} } });
     await Promise.all([manager.ready(), manager.ready(), manager.ready()]);
     assert.equal(manager.readyOwned, true);
     assert.match(manager.ownedPassword, /^[0-9a-f]{64}$/);
     assert.equal((await fetch('http://127.0.0.1:' + port + '/global/health')).status, 401);
-    const token = Buffer.from('opencode:' + manager.ownedPassword).toString('base64');
+    const token = Buffer.from('bridge-user:' + manager.ownedPassword).toString('base64');
     assert.equal((await fetch('http://127.0.0.1:' + port + '/global/health',
       { headers: { authorization: 'Basic ' + token } })).ok, true);
     await manager.dispose();

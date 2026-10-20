@@ -12,7 +12,7 @@
 
 - 只在插件自己启动的 OpenCode 子进程中启用 `dsh-bridge`，将**所有 agent 的 OpenCode 原生工具权限统一设置为 `* = deny`**。隔离子进程的 OpenCode 配置目录，禁止继承项目配置、普通 OpenCode 插件和 MCP；只保留既有数据/鉴权目录。不会改用户全局设置。
 - 为本地 OpenCode 服务生成仅存在于插件进程内的随机 Basic Auth 密码，未经认证的 `127.0.0.1:4096` 请求会返回 401。出于安全考虑，新的 Desktop 自动服务不能再用无认证的 `Invoke-RestMethod .../global/health` 直接测试。
-- `agent` 固定为 `dsh-bridge`：托管服务和模型适配器均拒绝内置 `plan`/`build` 或任意自定义 Agent（`BRIDGE_AGENT_REQUIRED`），防止通过配置绕开原生工具权限隔离。托管服务每次生成新的随机 Basic Auth 密码，不使用父进程既有的密码。
+- `agent` 固定为 `dsh-bridge`：托管服务和模型适配器均拒绝内置 `plan`/`build` 或任意自定义 Agent（`BRIDGE_AGENT_REQUIRED`），防止通过配置绕开原生工具权限隔离。托管服务每次生成新的随机 Basic Auth 密码，不使用父进程既有的密码；`passwordEnv` 仅用于连接外部手动启动的服务，托管子进程始终通过 OpenCode 官方的 `OPENCODE_SERVER_PASSWORD` 环境变量接收随机凭据。
 - `strictOwnedServer` 默认开启：**不允许模型请求复用未经插件管理的既有 OpenCode 进程**，避免那个进程带有不受控的权限或插件。要切换新版本，先停止旧的 `opencode serve`，再重启 DSH Desktop。
 - 对 DSH 传入的每个工具名称做精确白名单检查。模型的格式错误、未声明工具、截断工具请求，以及 OpenCode 服务返回的任何原生工具事件都被标记为失败，不会提交为一个“成功调用”。
 

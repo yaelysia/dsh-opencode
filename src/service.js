@@ -180,7 +180,14 @@ export class OpenCodeService {
       this.agent,
       root,
     );
-    childEnv[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'] = this.ownedPassword;
+    // OpenCode itself reads these canonical environment names. passwordEnv is
+    // only a lookup key for connecting to manually started external servers.
+    if (this.config.passwordEnv && this.config.passwordEnv !== 'OPENCODE_SERVER_PASSWORD') {
+      delete childEnv[this.config.passwordEnv];
+    }
+    childEnv.OPENCODE_SERVER_PASSWORD = this.ownedPassword;
+    childEnv.OPENCODE_SERVER_USERNAME = this.config.username ||
+      this.env.OPENCODE_SERVER_USERNAME || 'opencode';
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
     }
