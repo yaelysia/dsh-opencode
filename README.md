@@ -67,15 +67,15 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 
 ### 配置页（不需要手动编辑 YAML）
 
-DSH Desktop **侧边栏 → 插件 → 已安装插件 → dsh-opencode → 组件 `opencode-serve` 右侧的「配置」**。
+DSH Desktop **侧边栏 → 插件 → 已安装插件 → dsh-opencode**。打开组合包详情后，配置表单直接显示在详情页面（高级配置默认折叠），无需再进入组件或编辑 YAML。
 
-此页面由本插件自己的浏览器半侧提供（DSH 官方 `plugins.row.config` 扩展点），使用 DSH 的设置表单模型、提交与恢复默认功能。保存后，DSH 将配置持久化到它自己维护的 profile 配置中；不需要用户新建 `cordis.patch.yml` 条目，也不需要后续自行清理。曾通过 DSH 自己的配置机制保存的字段可在页面点「恢复默认」来撤销覆盖。
+此页面由本插件自己的浏览器半侧提供（DSH 官方 `plugins.bundle.config` 扩展点），使用 DSH 的设置表单模型、提交与恢复默认功能。保存后，DSH 将配置持久化到它自己维护的 profile 配置中；不需要用户新建 `cordis.patch.yml` 条目，也不需要后续自行清理。曾通过 DSH 自己的配置机制保存的字段可在页面点「恢复默认」来撤销覆盖。
 
 页面分为「模型与工具」「本地服务」「高级配置」：覆盖 `guardedReadCompatibility`、`ssePreviewEnabled`、工具桥接、本地标题、自动启动、代理处理、服务地址、运行目录、模型列表和超时等可配置项。普通模式保持 `guardedReadCompatibility=false` 和 `ssePreviewEnabled=false`，只有明确测试时才开启实验功能。
 
 **保存后完整重启 DSH Desktop**：这套桥接将 OpenCode 子进程、安全守卫和模型注册绑定在插件启动时，因此修改页面中的值后，运行中的实例暂不热切换。关闭 DSH 前应停止当前模型生成，不要在有执行中任务时改动。
 
-没有「配置」按钮时：首先确认安装的是 `0.2.0-alpha.5` 及以上，且 `dsh-opencode` 组合包已启用；此版本直接附带预构建的 `lib/client.js`，无需另执行 npm 安装脚本或构建。
+没有看到表单时：首先确认安装的是 `0.2.0-alpha.5` 及以上，且 `dsh-opencode` 组合包已启用；此版本直接附带预构建的 `lib/client.js`，无需另执行 npm 安装脚本或构建。
 
 ## 主要配置
 

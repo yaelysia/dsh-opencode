@@ -76,7 +76,7 @@ test('the installed bundle ships a prebuilt DSH browser half without prepare scr
   assert.equal(manifest.scripts?.prepare, undefined);
 });
 
-test('the DSH client factory contributes a settings page to the installed plugin row', () => {
+test('the DSH client factory contributes settings directly to the bundle detail page', () => {
   const { exports, created } = loadClient();
   assert.deepEqual([...exports.inject], ['slots', 'locale', 'configForms']);
   const effects = [];
@@ -100,7 +100,7 @@ test('the DSH client factory contributes a settings page to the installed plugin
     },
     slots: {
       inject(name, register) {
-        assert.equal(name, 'plugins.row.config');
+        assert.equal(name, 'plugins.bundle.config');
         return register();
       },
       register(options, component) {
@@ -111,10 +111,10 @@ test('the DSH client factory contributes a settings page to the installed plugin
   };
   exports.apply(ctx);
   assert.equal(watched, true);
-  assert.equal(registration.options.key, 'dsh-opencode#opencode-serve');
+  assert.equal(registration.options.key, 'dsh-opencode');
   assert.equal(registration.options.locale, 'dsh-opencode.settings');
-  assert.equal(registration.options.name, 'plugins.row.config');
-  assert.equal(registration.options.label(), 'OpenCode 模型桥接');
+  assert.equal(registration.options.name, 'plugins.bundle.config');
+  assert.equal(dictionaries.zh.title, 'OpenCode 模型桥接');
   const face = registration.options.inject();
   const model = created[0];
   assert.deepEqual(Object.keys(model.specs).sort(), [
