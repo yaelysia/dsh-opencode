@@ -125,13 +125,24 @@ export class OpenCodeService {
   }
 
   /** Called at plugin mount and before each ordinary model call. */
-  async ready() {
+  async ready(options = {}) {
     if (this.closed) throw failure('OpenCode plugin is unloading', 'SERVER_STOPPED');
-    if (this.config.autoStart === false || !this.target) return;
-    if (this.starting) return this.starting;
-    if (this.owned && this.owned.exitCode === null && this.owned.signalCode === null && this.readyOwned) return;
-    this.starting = this.ensureStarted().finally(() => { this.starting = null; });
-    return this.starting;
+    if (this.config.autoStart !== false && this.target) {
+      if (this.starting) await this.starting;
+      else if (!(this.owned && this.owned.exitCode === null &&
+        this.owned.signalCode === null && this.readyOwned)) {
+        this.starting = this.ensureStarted().finally(() => { this.starting = null; });
+        await this.starting;
+      }
+    }
+    // When the DSH tool bridge is enabled, do not trust a pre-existing
+    // OpenCode process whose tools/config/plugins we cannot control.
+    if (options.requireManaged && !(this.owned && this.readyOwned &&
+      this.owned.exitCode === null && this.owned.signalCode === null)) {
+      throw failure('OpenCode tool boundary cannot be guaranteed for an external server. ' +
+        'Stop the existing opencode serve and restart DSH so the plugin owns its child process.',
+        'UNTRUSTED_OPENCODE_SERVER');
+    }
   }
 
   async ensureStarted() {
@@ -157,6 +168,7 @@ export class OpenCodeService {
     const childEnv = managedAgentEnvironment(
       childEnvironment(this.env, root, this.config.autoStartDirect !== false),
       this.config.agent || BRIDGE_AGENT_ID,
+      root,
     );
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
