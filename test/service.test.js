@@ -214,3 +214,85 @@ test('owned Basic Auth credentials never reuse inherited host credentials', () =
     void manager.dispose();
   }
 });
+
+test('guarded read refuses to run in an unmanaged OpenCode service', () => {
+  for (const config of [
+    { autoStart: false, guardedReadCompatibility: true },
+    { endpoint: 'http://192.168.1.1:4096', guardedReadCompatibility: true },
+  ]) {
+    assert.throws(() => new OpenCodeService(config),
+      error => error.code === 'GUARD_REQUIRES_MANAGED_SERVER');
+  }
+});
+
+async function guardedFixture(root) {
+  const target = path.join(root, 'guard-server.mjs');
+  await writeFile(target, [
+    "import { createServer } from 'node:http';",
+    "if (process.argv[3] !== 'skip') {",
+    "  const cfg = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);",
+    "  const plugin = await import(cfg.plugin[0]);",
+    "  const hooks = await plugin.DshNativeToolGuard();",
+    "  await hooks.config();",
+    "  try { await hooks['tool.execute.before']({ tool: 'read' }, { args: {} });",
+    "    throw Error('native read unexpectedly allowed');",
+    "  } catch (error) { if (!String(error.message).includes('DSH_OPENCODE_NATIVE_TOOL_BLOCKED')) throw error; }",
+    "}",
+    "createServer((req,res) => { res.setHeader('content-type','application/json');",
+    "  res.end(JSON.stringify(req.url==='/agent'?[{name:'dsh-bridge'}]:{healthy:true,version:'test'})); })",
+    "  .listen(Number(process.argv[2]), '127.0.0.1');",
+  ].join('\n'));
+  return target;
+}
+
+test('guarded-read managed service accepts only a loaded guard proof', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-guarded-read-'));
+  const script = await guardedFixture(root);
+  const reservation = await externalServer(healthy);
+  const port = reservation.port;
+  await reservation.close();
+  const manager = new OpenCodeService({
+    guardedReadCompatibility: true,
+    endpoint: 'http://127.0.0.1:' + port,
+    opencodeExecutable: process.execPath,
+    runtimeRoot: root,
+  }, { argsImpl: n => [script, String(n)], logger: { info() {} } });
+  let marker;
+  try {
+    await manager.ready({ requireManaged: true });
+    assert.equal(manager.readyOwned, true);
+    assert.equal(manager.guardVerified, true);
+    marker = manager.guardProof.marker;
+    const nonce = await import('node:fs/promises').then(fs => fs.readFile(marker, 'utf8'));
+    assert.equal(nonce, manager.guardProof.nonce);
+  } finally {
+    await manager.dispose();
+    if (marker) await assert.rejects(
+      import('node:fs/promises').then(fs => fs.readFile(marker)), error => error.code === 'ENOENT');
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('guarded-read service fails closed if OpenCode omits the native-tool hook', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-no-guard-'));
+  const script = await guardedFixture(root);
+  const reservation = await externalServer(healthy);
+  const port = reservation.port;
+  await reservation.close();
+  const manager = new OpenCodeService({
+    guardedReadCompatibility: true,
+    endpoint: 'http://127.0.0.1:' + port,
+    opencodeExecutable: process.execPath,
+    runtimeRoot: root,
+    autoStartTimeoutMs: 900,
+  }, { argsImpl: n => [script, String(n), 'skip'], logger: { info() {} } });
+  try {
+    await assert.rejects(manager.ready({ requireManaged: true }),
+      error => error.code === 'SERVER_GUARD_NOT_READY');
+    assert.equal(manager.readyOwned, false);
+    assert.equal(manager.owned, null);
+  } finally {
+    await manager.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});

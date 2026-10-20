@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir } from 'node:fs/promises';
+import { access, mkdir, readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,6 +55,8 @@ export class OpenCodeService {
   constructor(config = {}, deps = {}) {
     this.config = config;
     this.agent = requireBridgeAgent(config.agent || BRIDGE_AGENT_ID);
+    // Disabled by default until verified against the real OpenCode free tier.
+    this.guardedRead = config.guardedReadCompatibility === true;
     this.logger = deps.logger || console;
     this.env = deps.env || process.env;
     // An unguessable local server password belongs to this plugin instance only.
@@ -64,11 +66,17 @@ export class OpenCodeService {
     this.spawnImpl = deps.spawnImpl || spawn;
     this.accessImpl = deps.accessImpl || access;
     this.mkdirImpl = deps.mkdirImpl || mkdir;
+    this.readFileImpl = deps.readFileImpl || readFile;
+    this.rmImpl = deps.rmImpl || rm;
     this.portAvailableImpl = deps.portAvailableImpl || portAvailable;
     this.sleepImpl = deps.sleepImpl || sleep;
     this.argsImpl = deps.argsImpl || (port => ['serve', '--hostname', '127.0.0.1', '--port', String(port)]);
     this.controller = new AbortController();
     this.target = localEndpoint(config.endpoint);
+    if (this.guardedRead && (config.autoStart === false || !this.target)) {
+      throw failure('Guarded read requires an automatically managed loopback OpenCode process',
+        'GUARD_REQUIRES_MANAGED_SERVER');
+    }
     if (config.autoStart !== false && !this.target) {
       this.logger.info?.('dsh-opencode: auto-start skipped for non-loopback or non-HTTP endpoint');
     }
@@ -76,6 +84,19 @@ export class OpenCodeService {
     this.starting = null;
     this.closed = false;
     this.readyOwned = false;
+    this.guardProof = null;
+    this.guardVerified = false;
+  }
+
+  async verifyGuard() {
+    if (!this.guardedRead) return true;
+    if (this.guardVerified) return true;
+    if (!this.guardProof) return false;
+    try {
+      const content = await this.readFileImpl(this.guardProof.marker, 'utf8');
+      this.guardVerified = content === this.guardProof.nonce;
+    } catch { return false; }
+    return this.guardVerified;
   }
 
   passwordForClient() {
@@ -175,15 +196,27 @@ export class OpenCodeService {
       catch { throw failure('OpenCode executable not found: ' + exe +
         '. Configure opencodeExecutable.', 'SERVER_NOT_INSTALLED'); }
     }
+    if (this.guardedRead) {
+      this.guardProof = {
+        marker: path.join(root, 'dsh-guard-' + randomBytes(16).toString('hex') + '.ready'),
+        nonce: randomBytes(32).toString('hex'),
+      };
+      this.guardVerified = false;
+    }
     const childEnv = secureServerEnvironment(managedAgentEnvironment(
       childEnvironment(this.env, root, this.config.autoStartDirect !== false),
       this.agent,
       root,
+      { guardedRead: this.guardedRead },
     ), {
       password: this.ownedPassword,
       username: this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode',
       passwordEnv: this.config.passwordEnv,
     });
+    if (this.guardProof) {
+      childEnv.DSH_OPENCODE_GUARD_MARKER = this.guardProof.marker;
+      childEnv.DSH_OPENCODE_GUARD_NONCE = this.guardProof.nonce;
+    }
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
     }
@@ -205,15 +238,20 @@ export class OpenCodeService {
         this.controller.signal.throwIfAborted();
         if (await this.health()) {
           await this.assertAgentPresent();
-          this.readyOwned = terminal === null;
-          this.logger.info?.('dsh-opencode: local OpenCode server ready at ' + origin);
-          return;
+          if (await this.verifyGuard()) {
+            this.readyOwned = terminal === null;
+            this.logger.info?.('dsh-opencode: local OpenCode server ready at ' + origin);
+            return;
+          }
         }
         if (terminal !== null) throw failure('OpenCode server ' + terminal, 'SERVER_START_FAILED');
         if (Date.now() >= deadline) break;
         await this.sleepImpl(CHECK_INTERVAL_MS, undefined, { signal: this.controller.signal });
       } while (true);
-      throw failure('OpenCode server startup timed out', 'SERVER_START_TIMEOUT');
+      throw this.guardedRead
+        ? failure('OpenCode native-tool guard did not register; refusing model calls',
+          'SERVER_GUARD_NOT_READY')
+        : failure('OpenCode server startup timed out', 'SERVER_START_TIMEOUT');
     } catch (error) {
       if (this.owned === child) await this.stopOwned();
       throw error;
@@ -221,9 +259,13 @@ export class OpenCodeService {
   }
 
   async stopOwned() {
+    const proof = this.guardProof;
+    this.guardProof = null;
+    this.guardVerified = false;
     const child = this.owned;
     this.owned = null;
     this.readyOwned = false;
+    if (proof) await this.rmImpl(proof.marker, { force: true }).catch(() => {});
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     let done = false;
     const exited = new Promise(resolve => {

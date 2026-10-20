@@ -16,6 +16,7 @@ export const Config = Schema.object({
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
   localTitles: Schema.boolean().default(true),
   toolBridgeEnabled: Schema.boolean().default(true),
+  guardedReadCompatibility: Schema.boolean().default(false),
   // SSE is experimental until the user's actual OpenCode service is verified.
   ssePreviewEnabled: Schema.boolean().default(false),
   strictOwnedServer: Schema.boolean().default(true),
@@ -42,7 +43,8 @@ export function apply(ctx, config) {
     ...config,
     passwordProvider: () => supervisor.passwordForClient(),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
-      requireManaged: config.strictOwnedServer !== false || requireManaged === true,
+      requireManaged: config.strictOwnedServer !== false || requireManaged === true
+        || config.guardedReadCompatibility === true,
     }),
   }, ctx.logger));
   ctx.llm.registerConfigurableProviders?.([{
