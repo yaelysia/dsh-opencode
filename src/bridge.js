@@ -5,7 +5,8 @@ import { localSessionTitle } from './title.js';
 import { BRIDGE_AGENT_ID, requireBridgeAgent } from './managed-agent.js';
 import { openSessionEvents, SessionEventAccumulator } from './opencode-events.js';
 import {
-  TOOL_CALL_PREFIX, toolInstructions, parseToolRequest, assertNoOpenCodeToolParts, renderConversationMessage,
+  TOOL_CALL_PREFIX, toolInstructions, parseToolRequest, inspectNativeToolParts,
+  translateGuardedTool, nativeToolPart, renderConversationMessage,
 } from './tool-boundary.js';
 
 export const DEFAULT_MODELS = Object.freeze([
@@ -56,6 +57,7 @@ export class OpenCodeServeClient {
     this.logger = config.logger;
     this.ensureService = config.ensureService;
     this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
+    this.guardedReadCompatibility = config.guardedReadCompatibility === true;
     // Explicit opt-in: ignore prior persisted streamingEnabled=true defaults.
     this.streamingEnabled = config.ssePreviewEnabled === true;
     this.sessions = new Map();
@@ -162,7 +164,10 @@ export class OpenCodeServeClient {
     if (tools.length && !this.toolBridgeEnabled) {
       throw failure('DSH tools were provided but the model bridge is disabled', 'DSH_TOOLS_DISABLED');
     }
-    const toolGuide = toolInstructions(tools);
+    const toolGuide = toolInstructions(tools) + (this.guardedReadCompatibility && tools.length
+      ? '\nAny built-in OpenCode tools advertised for gateway compatibility are GUARDED '
+        + 'and will always fail; request DSH tools only, using DSH_TOOL_CALL_V1.'
+      : '');
     // Require the isolated, plugin-owned OpenCode process for tool-bearing requests.
     await this.ensureService?.({ requireManaged: tools.length > 0 });
     if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
@@ -208,19 +213,38 @@ export class OpenCodeServeClient {
         this.logger?.warn?.('dsh-opencode: SSE connected but delivered no assistant text; ' +
           'this OpenCode server may not publish incremental events. Using final response.');
       }
-      if (collector?.nativeToolSeen) {
-        throw failure('OpenCode emitted an internal tool event', 'OPENCODE_TOOL_BOUNDARY');
-      }
       if (response?.info?.error) throw providerFailure(response.info.error);
       if (!Array.isArray(response?.parts)) throw failure('OpenCode returned no message parts', 'INVALID_RESPONSE');
-      assertNoOpenCodeToolParts(response.parts);
       if (response.info?.modelID && response.info.modelID !== options.model) throw failure('OpenCode returned a different model', 'MODEL_MISMATCH');
+      // Verify ALL tool parts, including SSE-only events. Only the exact
+      // terminal denial from our confirmed native guard can carry intent into
+      // DSH. Provider-executed, unknown or successful tool events still fail.
+      const native = new Map();
+      for (const part of collector?.nativeToolParts.values() ?? []) {
+        native.set(part.id, part);
+      }
+      for (const part of response.parts.filter(nativeToolPart)) {
+        native.set(part.id ?? part.callID ?? Symbol(), part);
+      }
+      const guardedCalls = inspectNativeToolParts([...native.values()],
+        { guarded: this.guardedReadCompatibility });
       const text = response.parts.filter(p => p?.type === 'text').map(p => p.text ?? '').join('');
-      if (!text.trim()) {
+      let dshToolCall = parseToolRequest(text, tools);
+      if (guardedCalls.length && !dshToolCall) {
+        if (guardedCalls.length !== 1) {
+          throw failure('OpenCode attempted multiple guarded native tools in one turn; '
+            + 'a single DSH call cannot represent the batch', 'GUARDED_TOOL_BATCH');
+        }
+        dshToolCall = translateGuardedTool(guardedCalls[0], tools);
+        if (!dshToolCall) {
+          throw failure('The blocked OpenCode tool has no matching declared DSH tool or '
+            + 'compatible argument schema', 'GUARDED_TOOL_UNMAPPED');
+        }
+      }
+      if (!text.trim() && !dshToolCall) {
         const kinds = response.parts.map(p => p?.type || '?').join(', ') || 'none';
         throw failure('OpenCode returned no visible text (part types: ' + kinds + ')', 'EMPTY_RESPONSE');
       }
-      const dshToolCall = parseToolRequest(text, tools);
       // A truncated tool request must never be dispatched, even if its JSON parsed.
       if (dshToolCall && response.info?.finish === 'length') {
         throw failure('Truncated model output cannot authorize a DSH tool call',
@@ -305,24 +329,35 @@ export function createAdapter(config = {}, fetchImpl) {
           const response = item.response;
           const tool = response.dshToolCall;
           if (tool) {
+            // A model may have streamed commentary before its native tool
+            // attempt. Keep that text as one block and still dispatch the
+            // guarded, validated DSH tool as the next block.
             if (textStarted) {
-              throw failure('Streamed text conflicts with the final DSH tool request', 'STREAM_MISMATCH');
+              yield { type: 'block-end', index: 0,
+                block: { type: 'text', text: streamed } };
             }
-            yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-            yield { type: 'tool-call-delta', index: 0, id: tool.id, name: tool.name,
+            const index = textStarted ? 1 : 0;
+            yield { type: 'block-start', index, blockType: 'tool-call' };
+            yield { type: 'tool-call-delta', index, id: tool.id, name: tool.name,
               argumentsDelta: tool.arguments };
-            yield { type: 'block-end', index: 0, block: { type: 'tool-call', ...tool } };
+            yield { type: 'block-end', index, block: { type: 'tool-call', ...tool } };
           } else {
             const content = response.parts.filter(part => part?.type === 'text')
               .map(part => part.text || '').join('');
-            if (!content.startsWith(streamed)) {
-              throw failure('OpenCode SSE text differs from the final message', 'STREAM_MISMATCH');
-            }
             if (!textStarted) {
               yield { type: 'block-start', index: 0, blockType: 'text' };
             }
-            const tail = content.slice(streamed.length);
-            if (tail) yield { type: 'text-delta', index: 0, text: tail };
+            if (content.startsWith(streamed)) {
+              const tail = content.slice(streamed.length);
+              if (tail) yield { type: 'text-delta', index: 0, text: tail };
+            } else {
+              // OpenCode's SSE stream is provisional; message parts can be
+              // revised or originate from an intermediate assistant step.
+              // DSH's block-end is authoritative and replaces partial text.
+              config.logger?.warn?.('dsh-opencode: SSE/final text divergence '
+                + '(partial chars=' + streamed.length + ', final chars=' + content.length
+                + '); using authoritative final message');
+            }
             yield { type: 'block-end', index: 0, block: { type: 'text', text: content } };
           }
           const usage = response.info?.tokens;

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createAdapter, OpenCodeServeClient } from '../src/bridge.js';
 import {
   TOOL_CALL_PREFIX, toolInstructions, parseToolRequest, assertNoOpenCodeToolParts,
-  renderConversationMessage,
+  inspectNativeToolParts, translateGuardedTool, NATIVE_GUARD_DENIAL, renderConversationMessage,
 } from '../src/tool-boundary.js';
 
 const model = 'deepseek-v4.1-flash-free';
@@ -185,4 +185,115 @@ test('DSH-denied tool call is returned as a tool error, not executed in OpenCode
   assert.match(server.calls[2].body.parts[0].text, /error=true/);
   assert.match(server.calls[2].body.parts[0].text, /permission denied/);
   assert.equal(server.calls.length, 3, 'no direct OpenCode tool execution requests');
+});
+
+const hostTools = [
+  { name: 'read', description: 'Read one DSH-approved file', parameters: {
+    type: 'object', properties: {
+      file_path: { type: 'string', required: true }, offset: { type: 'integer' },
+      limit: { type: 'integer' },
+    }, required: ['file_path'],
+  } },
+  { name: 'write', description: 'Write a file via DSH only', parameters: {
+    type: 'object', properties: {
+      file_path: { type: 'string', required: true }, content: { type: 'string', required: true },
+    }, required: ['file_path', 'content'],
+  } },
+  { name: 'edit', description: 'Edit a file via DSH only', parameters: {
+    type: 'object', properties: {
+      file_path: { type: 'string' }, old_string: { type: 'string' },
+      new_string: { type: 'string' }, replace_all: { type: 'boolean' },
+    }, required: ['file_path', 'old_string', 'new_string'],
+  } },
+  { name: 'glob', description: 'Discover files', parameters: {
+    type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } },
+    required: ['pattern'],
+  } },
+  { name: 'pwsh', description: 'DSH-managed Windows shell', parameters: {
+    type: 'object', properties: { command: { type: 'string' } },
+    required: ['command'],
+  } },
+];
+const intercepted = (tool, input, overrides = {}) => ({
+  id: 'native-id', callID: 'native-call', type: 'tool', tool,
+  state: { status: 'error', input, error: 'Error: ' + NATIVE_GUARD_DENIAL },
+  ...overrides,
+});
+
+test('verified guard failures map native read/write/edit/glob/shell to declared DSH schema', () => {
+  const cases = [
+    ['read', { filePath: 'test.txt', limit: 4 }, 'read', { file_path: 'test.txt', limit: 4 }],
+    ['write', { filePath: 'text.txt', content: 'ok' }, 'write',
+      { file_path: 'text.txt', content: 'ok' }],
+    ['edit', { filePath: 'text.txt', oldString: 'ok', newString: 'okay' }, 'edit',
+      { file_path: 'text.txt', old_string: 'ok', new_string: 'okay' }],
+    ['glob', { pattern: '*' }, 'glob', { pattern: '*' }],
+    ['shell', { command: 'dir' }, 'pwsh', { command: 'dir' }],
+  ];
+  for (const [nativeName, args, dshName, expected] of cases) {
+    const part = intercepted(nativeName, args);
+    assert.equal(inspectNativeToolParts([part], { guarded: true }).length, 1);
+    const converted = translateGuardedTool(part, hostTools);
+    assert.equal(converted.name, dshName);
+    assert.deepEqual(JSON.parse(converted.arguments), expected);
+  }
+});
+
+test('guarded native requests are rejected unless their full origin is a failed guard hook', () => {
+  const good = intercepted('read', { filePath: 'safe.txt' });
+  const suspicious = [
+    { ...good, state: { ...good.state, status: 'completed', output: 'secret' } },
+    { ...good, state: { ...good.state, status: 'running' } },
+    { ...good, state: { ...good.state, error: 'Permission denied' } },
+    { ...good, metadata: { providerExecuted: true } },
+    { ...good, state: { ...good.state, metadata: { providerExecuted: true } } },
+    { ...good, type: 'tool-call' },
+  ];
+  for (const part of suspicious) assert.throws(
+    () => inspectNativeToolParts([part], { guarded: true }),
+    error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  assert.throws(() => inspectNativeToolParts([good], { guarded: false }),
+    error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+});
+
+test('native tool translation cannot bypass the DSH declaration whitelist or schema', () => {
+  assert.equal(translateGuardedTool(intercepted('write', { filePath: 'a', content: 'ok' }),
+    hostTools.filter(tool => tool.name !== 'write')), null);
+  assert.equal(translateGuardedTool(intercepted('write', { filePath: 'a' }), hostTools), null);
+  assert.equal(translateGuardedTool(intercepted('write', {
+    filePath: 'a', content: 'ok', unapproved: 'hidden',
+  }), hostTools), null);
+  assert.equal(translateGuardedTool(intercepted('task', { prompt: 'bad' }), hostTools), null);
+});
+
+test('a blocked native OpenCode write becomes a DSH tool call without executing OpenCode', async () => {
+  const blocked = intercepted('write', { filePath: 'text.txt', content: 'ok' });
+  const server = mockServer([[blocked]]);
+  const adapter = createAdapter({ guardedReadCompatibility: true }, server.fetch);
+  const chunks = await getChunks(adapter, [user], hostTools);
+  assert.deepEqual(chunks.map(x => x.type),
+    ['block-start', 'tool-call-delta', 'block-end', 'finish']);
+  assert.equal(chunks[1].name, 'write');
+  assert.deepEqual(JSON.parse(chunks[1].argumentsDelta),
+    { file_path: 'text.txt', content: 'ok' });
+  assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
+  assert.equal(server.calls.length, 2, 'no direct tool request is made by the bridge');
+});
+
+test('mixed successful and guarded native tool events fail closed', async () => {
+  const server = mockServer([[
+    intercepted('read', { filePath: 'safe.txt' }),
+    { ...intercepted('write', { filePath: 'text.txt', content: 'bad' }),
+      id: 'native-unsafe', state: { status: 'completed', input: {}, output: 'wrote' } },
+  ]]);
+  const client = new OpenCodeServeClient({ guardedReadCompatibility: true }, server.fetch);
+  await assert.rejects(client.complete({ model, tools: hostTools, messages: [user] }),
+    error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+});
+
+test('a guarded OpenCode request with an undeclared target is not dispatched', async () => {
+  const server = mockServer([[intercepted('write', { filePath: 'a', content: 'b' })]]);
+  const client = new OpenCodeServeClient({ guardedReadCompatibility: true }, server.fetch);
+  await assert.rejects(client.complete({ model, tools: hostTools.filter(t => t.name !== 'write'),
+    messages: [user] }), error => error.code === 'GUARDED_TOOL_UNMAPPED');
 });

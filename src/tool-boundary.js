@@ -72,6 +72,86 @@ export function parseToolRequest(output, tools) {
   return { id: 'call_' + randomUUID(), name: value.name, arguments: JSON.stringify(value.arguments) };
 }
 
+
+/** A native OpenCode tool part is safe to *interpret*, never execute, only if
+ * our verified pre-execution guard rejected it. The DSH host executes any
+ * translated request and independently enforces approval and argument schema. */
+export const NATIVE_GUARD_DENIAL = 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED';
+
+const NATIVE_FIELDS = Object.freeze({
+  read: { filePath: 'file_path', offset: 'offset', limit: 'limit' },
+  write: { filePath: 'file_path', content: 'content' },
+  edit: { filePath: 'file_path', oldString: 'old_string',
+    newString: 'new_string', replaceAll: 'replace_all' },
+  glob: { pattern: 'pattern', path: 'path' },
+  grep: { pattern: 'pattern', path: 'path', include: 'include' },
+  shell: { command: 'command', timeout: 'timeoutMs', workdir: 'workdir' },
+});
+
+const NATIVE_TARGETS = Object.freeze({
+  read: ['read', 'read_file'], write: ['write', 'write_file'],
+  edit: ['edit'], glob: ['glob'], grep: ['grep'],
+  shell: ['pwsh', 'bash', 'run_command'],
+});
+
+export const nativeToolPart = part =>
+  part && ['tool', 'tool-call', 'tool-result', 'tool_call', 'tool_result'].includes(part.type);
+
+/** The guard denial is the only native event admitted to a DSH tool boundary.
+ * "providerExecuted" or a completed/pending result must never be forgiven. */
+export function inspectNativeToolParts(parts, { guarded = false } = {}) {
+  const native = (parts ?? []).filter(nativeToolPart);
+  if (!native.length) return [];
+  for (const part of native) {
+    if (!guarded || part.type !== 'tool'
+      || part.state?.status !== 'error'
+      || typeof part.state.error !== 'string'
+      || !part.state.error.includes(NATIVE_GUARD_DENIAL)
+      || part.metadata?.providerExecuted === true
+      || part.state.metadata?.providerExecuted === true) {
+      throw failure('OpenCode emitted a native tool event without a verified pre-execution denial',
+        'OPENCODE_TOOL_BOUNDARY');
+    }
+  }
+  return native;
+}
+
+/** Deliberately small, explicit arg translation. Never infer arbitrary tool
+ * aliases or invent required fields: an unknown call remains rejected. */
+export function translateGuardedTool(part, tools) {
+  const name = part.tool;
+  const mapping = NATIVE_FIELDS[name];
+  if (!mapping || !object(part.state?.input)) return null;
+  const candidates = NATIVE_TARGETS[name] ?? [];
+  for (const targetName of candidates) {
+    const declared = tools.find(tool => tool.name === targetName);
+    const schema = declared?.parameters;
+    if (!object(schema?.properties)) continue;
+    const converted = {};
+    let valid = true;
+    for (const [key, value] of Object.entries(part.state.input)) {
+      if (!Object.hasOwn(mapping, key)) { valid = false; break; }
+      const preferred = mapping[key];
+      const targetKey = Object.hasOwn(schema.properties, preferred) ? preferred
+        : Object.hasOwn(schema.properties, key) ? key
+          : null;
+      if (!targetKey) { valid = false; break; }
+      converted[targetKey] = value;
+    }
+    if (!valid) continue;
+    const required = new Set([
+      ...(Array.isArray(schema.required) ? schema.required : []),
+      ...Object.entries(schema.properties)
+        .filter(([, spec]) => spec?.required === true).map(([key]) => key),
+    ]);
+    if ([...required].some(key => !Object.hasOwn(converted, key))) continue;
+    return parseToolRequest(TOOL_CALL_PREFIX + JSON.stringify({
+      name: targetName, arguments: converted,
+    }), tools);
+  }
+  return null;
+}
+
 /** Preserve tool-result attribution for next model turn without executing it. */
 export function renderConversationMessage(message, textOf) {
   const role = message?.role || 'user';

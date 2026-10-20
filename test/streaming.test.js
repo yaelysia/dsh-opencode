@@ -16,7 +16,7 @@ const tools = [{ name: 'read_file', description: 'Read only a test file',
   parameters: { type: 'object', properties: { path: { type: 'string' } } },
 }];
 
-function fixture({ responseText = 'Hello world', plan = () => {}, mode = 'events', envelope = false } = {}) {
+function fixture({ responseText = 'Hello world', responseParts, plan = () => {}, mode = 'events', envelope = false } = {}) {
   const paths = [];
   const encoder = new TextEncoder();
   let streamController;
@@ -57,7 +57,7 @@ function fixture({ responseText = 'Hello world', plan = () => {}, mode = 'events
       const reply = new Promise((resolve, reject) => {
         finishReply = () => resolve(Response.json({
           info: { modelID: model, finish: 'stop', tokens: { input: 7, output: 3 } },
-          parts: [{ type: 'text', text: responseText }],
+          parts: responseParts ?? [{ type: 'text', text: responseText }],
         }));
         init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       });
@@ -230,17 +230,22 @@ test('foreign sessions and user message echoes never reach the DSH text stream',
   assert.equal(chunks.filter(c => c.type === 'text-delta').map(c => c.text).join(''), 'SAFE');
 });
 
-test('stream mismatch is a failure, not a silently stitched answer', async () => {
+test('OpenCode SSE revision mismatch uses authoritative final block, not a late error', async () => {
   const upstream = fixture({ responseText: 'final', plan({ send }) {
     send('message.part.updated', { sessionID, part: textPart('stale') });
   } });
-  const p = assert.rejects(async () => {
-    await consume(await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch)));
-  }, e => e.code === 'STREAM_MISMATCH');
+  const warnings = [];
+  const p = consume(await start(createAdapter({
+    ssePreviewEnabled: true, logger: { warn: msg => warnings.push(msg) },
+  }, upstream.fetch)));
   await upstream.posted;
-  await sleep(20);
+  await sleep(25);
   upstream.finish();
-  await p;
+  const chunks = await p;
+  assert.deepEqual(chunks.filter(x => x.type === 'text-delta').map(x => x.text), ['stale']);
+  assert.equal(chunks.find(x => x.type === 'block-end').block.text, 'final');
+  assert.equal(chunks.at(-1).reason.kind, 'stop');
+  assert.ok(warnings.some(x => x.includes('SSE/final text divergence')));
 });
 
 test('OpenCode native tool events observed via SSE fail closed even if omitted by final text', async () => {
@@ -304,4 +309,76 @@ test('upstream CLIENT_RESTRICTED is reported even without an SSE request', async
   await assert.rejects(async () => consume(await start(adapter)),
     error => error.code === 'CLIENT_RESTRICTED');
   assert.deepEqual(paths, ['/session', '/session/sse-off/message']);
+});
+
+test('a blocked native tool in both SSE and final reply becomes a DSH-only tool call', async () => {
+  const guarded = {
+    type: 'tool', id: 'part-guarded', sessionID, messageID: assistantID,
+    tool: 'write', callID: 'native-call-1',
+    state: { status: 'error', input: { filePath: 'text.txt', content: 'ok' },
+      error: 'Error: DSH_OPENCODE_NATIVE_TOOL_BLOCKED' },
+  };
+  const upstream = fixture({ responseParts: [guarded], plan({ send }) {
+    send('message.part.updated', { sessionID, part: guarded });
+  } });
+  const dshTools = [{ name: 'write', description: 'Create DSH file',
+    parameters: { type: 'object', properties: {
+      file_path: { type: 'string' }, content: { type: 'string' },
+    }, required: ['file_path', 'content'] } }];
+  const pending = consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, upstream.fetch), { tools: dshTools }));
+  await upstream.posted;
+  upstream.finish();
+  const chunks = await pending;
+  assert.deepEqual(chunks.map(c => c.type),
+    ['block-start', 'tool-call-delta', 'block-end', 'usage', 'finish']);
+  assert.equal(chunks[1].name, 'write');
+  assert.deepEqual(JSON.parse(chunks[1].argumentsDelta),
+    { file_path: 'text.txt', content: 'ok' });
+});
+
+test('a forged or successful SSE-only native tool event is never dismissed', async () => {
+  const native = {
+    type: 'tool', id: 'unsafe', sessionID, messageID: assistantID,
+    tool: 'read', state: { status: 'completed', input: { filePath: 'a' }, output: 'secret' },
+  };
+  const upstream = fixture({ responseText: 'Looks fine', plan({ send }) {
+    send('message.part.updated', { sessionID, part: native });
+  } });
+  const pending = assert.rejects(async () => consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, upstream.fetch)), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  await upstream.posted;
+  await sleep(25);
+  upstream.finish();
+  await pending;
+});
+
+test('ordinary streamed text before a guarded native call remains a text block before DSH tool', async () => {
+  const blocked = {
+    type: 'tool', id: 'blocked', sessionID, messageID: assistantID,
+    tool: 'glob', state: { status: 'error', input: { pattern: '*' },
+      error: 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED' },
+  };
+  const upstream = fixture({ responseParts: [
+    { type: 'text', text: 'Checking the directory' }, blocked,
+  ], plan({ send }) {
+    send('message.part.updated', { sessionID, part: textPart('Checking ') });
+    send('message.part.updated', { sessionID, part: blocked });
+  } });
+  const dshTools = [{ name: 'glob', description: 'Find directory names',
+    parameters: { type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] } }];
+  const pending = consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, upstream.fetch), { tools: dshTools }));
+  await upstream.posted;
+  await sleep(25);
+  upstream.finish();
+  const chunks = await pending;
+  assert.deepEqual(chunks.map(x => x.type),
+    ['block-start', 'text-delta', 'block-end',
+      'block-start', 'tool-call-delta', 'block-end', 'usage', 'finish']);
+  assert.equal(chunks[2].block.text, 'Checking ');
+  assert.equal(chunks[4].name, 'glob');
 });

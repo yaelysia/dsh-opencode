@@ -67,6 +67,7 @@ export class SessionEventAccumulator {
     this.parts = new Map();
     this.text = '';
     this.nativeToolSeen = false;
+    this.nativeToolParts = new Map();
   }
 
   accept(raw) {
@@ -87,6 +88,7 @@ export class SessionEventAccumulator {
     if (!this.assistantId || messageId !== this.assistantId) return;
     if (type === 'message.part.updated' && part?.type === 'tool') {
       this.nativeToolSeen = true;
+      if (typeof part.id === 'string') this.nativeToolParts.set(part.id, part);
       return;
     }
     if (this.nativeToolSeen) return;
