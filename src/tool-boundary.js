@@ -114,14 +114,15 @@ export const nativeToolPart = part =>
 
 /** The guard denial is the only native event admitted to a DSH tool boundary.
  * "providerExecuted" or a completed/pending result must never be forgiven. */
-export function inspectNativeToolParts(parts, { guarded = false } = {}) {
+export function inspectNativeToolParts(parts, { guarded = false, verifiedDenials = new Set() } = {}) {
   const native = (parts ?? []).filter(nativeToolPart);
   if (!native.length) return [];
   for (const part of native) {
     if (!guarded || part.type !== 'tool'
       || part.state?.status !== 'error'
       || typeof part.state.error !== 'string'
-      || !part.state.error.includes(NATIVE_GUARD_DENIAL)
+      || (!part.state.error.includes(NATIVE_GUARD_DENIAL)
+        && !verifiedDenials.has(part.id))
       || part.metadata?.providerExecuted === true
       || part.state.metadata?.providerExecuted === true) {
       throw failure('OpenCode emitted a native tool event without a verified pre-execution denial',

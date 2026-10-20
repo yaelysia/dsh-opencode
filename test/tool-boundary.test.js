@@ -331,3 +331,18 @@ test('bridge file-tool guidance takes priority over generic shell usage', () => 
   assert.match(guidance, /glob\/grep\/read\/write\/edit tools instead of pwsh/);
   assert.match(guidance, /current DSH workspace/);
 });
+
+test('an authenticated hook audit may prove a native denial even if OpenCode rewrote error text', () => {
+  const part = intercepted('edit', { filePath: 'text.txt',
+    oldString: 'ok', newString: 'ok\nhello world' });
+  part.state.error = 'OpenCode internal plugin execution failed';
+  assert.throws(() => inspectNativeToolParts([part], { guarded: true }),
+    error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  assert.equal(inspectNativeToolParts([part], {
+    guarded: true, verifiedDenials: new Set([part.id]),
+  }).length, 1);
+  assert.throws(() => inspectNativeToolParts([{
+    ...part, state: { ...part.state, status: 'completed' },
+  }], { guarded: true, verifiedDenials: new Set([part.id]) }),
+  error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+});

@@ -52,6 +52,7 @@ export function apply(ctx, config) {
   ctx.llm.registerAdapter([provider], new ModelAdapter({
     ...options,
     passwordProvider: () => supervisor.passwordForClient(),
+    verifyNativeDenials: parts => supervisor.verifiedNativeDenials(parts),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
       requireManaged: options.strictOwnedServer !== false || requireManaged === true
         || options.guardedReadCompatibility === true,

@@ -165,3 +165,25 @@ test('DSH system and developer policies stay in the privileged system slot', asy
   assert.doesNotMatch(calls[0].parts[0].text, /Do not use PowerShell/);
   assert.doesNotMatch(calls[0].parts[0].text, /DSH system/);
 });
+
+test('DSH AGENTS.md language rule is explicitly preserved below system/developer', async () => {
+  const payloads = [];
+  const fetch = async (url, req) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'locale-test' });
+    payloads.push(JSON.parse(req.body));
+    return Response.json({ info: {}, parts: [{ type: 'text', text: '好的' }] });
+  };
+  const client = new OpenCodeServeClient({}, fetch);
+  await client.complete({ model: 'deepseek-v4.1-flash-free',
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'Follow higher-priority rules.' }] },
+      { role: 'user', content: [{ type: 'text', text: '你好' }] },
+      { role: 'user', source: { kind: 'agent-instructions', form: 'instructions' },
+        content: [{ type: 'text', text: '<system-reminder>每次都要用中文回复。</system-reminder>' }] },
+    ],
+  });
+  assert.equal(payloads.length, 1);
+  assert.match(payloads[0].system, /DSH user workspace instructions/);
+  assert.match(payloads[0].system, /每次都要用中文回复/);
+  assert.match(payloads[0].system, /lower priority than system\/developer/);
+});

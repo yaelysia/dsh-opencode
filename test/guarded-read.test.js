@@ -37,15 +37,19 @@ test('guarded-read mode exposes only the read declaration and an isolated guard 
 test('guard cannot be initialized without a one-time managed startup proof', async () => {
   const previousMarker = process.env.DSH_OPENCODE_GUARD_MARKER;
   const previousNonce = process.env.DSH_OPENCODE_GUARD_NONCE;
+  const previousAudit = process.env.DSH_OPENCODE_GUARD_AUDIT;
   try {
     delete process.env.DSH_OPENCODE_GUARD_MARKER;
     delete process.env.DSH_OPENCODE_GUARD_NONCE;
+    delete process.env.DSH_OPENCODE_GUARD_AUDIT;
     await assert.rejects(DshNativeToolGuard(), /authenticated managed startup/);
   } finally {
     if (previousMarker === undefined) delete process.env.DSH_OPENCODE_GUARD_MARKER;
     else process.env.DSH_OPENCODE_GUARD_MARKER = previousMarker;
     if (previousNonce === undefined) delete process.env.DSH_OPENCODE_GUARD_NONCE;
     else process.env.DSH_OPENCODE_GUARD_NONCE = previousNonce;
+    if (previousAudit === undefined) delete process.env.DSH_OPENCODE_GUARD_AUDIT;
+    else process.env.DSH_OPENCODE_GUARD_AUDIT = previousAudit;
   }
 });
 
@@ -57,6 +61,7 @@ test('registered guard writes a nonce proof and denies all native tool invocatio
   try {
     process.env.DSH_OPENCODE_GUARD_MARKER = marker;
     process.env.DSH_OPENCODE_GUARD_NONCE = nonce;
+    process.env.DSH_OPENCODE_GUARD_AUDIT = marker + '.audit';
     const hooks = await DshNativeToolGuard();
     assert.equal(typeof hooks['tool.execute.before'], 'function');
     await hooks.config();
@@ -71,5 +76,6 @@ test('registered guard writes a nonce proof and denies all native tool invocatio
     if (previousNonce === undefined) delete process.env.DSH_OPENCODE_GUARD_NONCE;
     else process.env.DSH_OPENCODE_GUARD_NONCE = previousNonce;
     await rm(marker, { force: true });
+    await rm(marker + '.audit', { force: true });
   }
 });

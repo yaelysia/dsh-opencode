@@ -329,3 +329,29 @@ test('transient agent lookup transport failure is retried before guard startup c
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('audit proof verifies only matching native invocation IDs, tools, sessions, and nonce', async () => {
+  const manager = new OpenCodeService({ guardedReadCompatibility: true }, {
+    readFileImpl: async () => [
+      JSON.stringify({ nonce: 'a'.repeat(64), sessionID: 's1',
+        callID: 'native-7', tool: 'edit' }),
+      JSON.stringify({ nonce: 'other', sessionID: 's2',
+        callID: 'native-8', tool: 'read' }),
+    ].join('\n'),
+  });
+  manager.guardVerified = true;
+  manager.guardProof = { nonce: 'a'.repeat(64), marker: 'unused', audit: 'audit' };
+  const parts = [
+    { id: 'p1', type: 'tool', sessionID: 's1', callID: 'native-7', tool: 'edit',
+      state: { status: 'error', input: {} } },
+    { id: 'p2', type: 'tool', sessionID: 's2', callID: 'native-8', tool: 'read',
+      state: { status: 'error', input: {} } },
+  ];
+  try {
+    const verified = await manager.verifiedNativeDenials(parts);
+    assert.deepEqual([...verified], ['p1']);
+  } finally {
+    manager.guardProof = null;
+    await manager.dispose();
+  }
+});

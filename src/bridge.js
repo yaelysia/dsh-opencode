@@ -56,6 +56,7 @@ export class OpenCodeServeClient {
     this.attributionHeaders = config.attributionHeaders ?? {};
     this.logger = config.logger;
     this.ensureService = config.ensureService;
+    this.verifyNativeDenials = config.verifyNativeDenials;
     this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
     this.guardedReadCompatibility = config.guardedReadCompatibility === true;
     // Explicit opt-in: ignore prior persisted streamingEnabled=true defaults.
@@ -186,6 +187,12 @@ export class OpenCodeServeClient {
     // user text is demoted beneath OpenCode's own agent prompt and may break
     // tool policies; both privileged roles belong in the upstream system slot.
     const privileged = message => ['system', 'developer'].includes(message?.role);
+    // DSH classifies AGENTS.md as a user-side instruction snapshot. It must
+    // remain below system/developer policy, but it is still explicit user
+    // guidance and should not be buried inside serialized conversation text.
+    const workspaceInstruction = message => message?.role === 'user'
+      && message?.source?.kind === 'agent-instructions'
+      && message?.source?.form === 'instructions';
     const toSend = (session
       ? unseen.filter(message => message.role !== 'assistant'
         || message.content?.some?.(part => part?.type === 'tool-call'))
@@ -195,6 +202,9 @@ export class OpenCodeServeClient {
     const system = [options?.system,
       ...messages.filter(privileged).map(m => textOf(m.content)),
       toolGuide,
+      ...messages.filter(workspaceInstruction).map(m =>
+        'DSH user workspace instructions (lower priority than system/developer; '
+        + 'follow when applicable):\n' + textOf(m.content)),
     ].filter(Boolean).join('\n\n');
     const payload = {
       model: { providerID: this.backendProviderId, modelID: options.model },
@@ -292,8 +302,11 @@ export class OpenCodeServeClient {
             'NATIVE_TOOL_HISTORY_UNAVAILABLE');
         }
       }
-      const guardedCalls = inspectNativeToolParts([...native.values()],
-        { guarded: this.guardedReadCompatibility });
+      const nativeParts = [...native.values()];
+      const verifiedDenials = this.verifyNativeDenials
+        ? await this.verifyNativeDenials(nativeParts) : new Set();
+      const guardedCalls = inspectNativeToolParts(nativeParts,
+        { guarded: this.guardedReadCompatibility, verifiedDenials });
       const text = response.parts.filter(p => p?.type === 'text').map(p => p.text ?? '').join('');
       let dshToolCall = parseToolRequest(text, tools);
       if (guardedCalls.length && !dshToolCall) {

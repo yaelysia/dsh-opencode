@@ -88,6 +88,30 @@ export class OpenCodeService {
     this.guardVerified = false;
   }
 
+  async verifiedNativeDenials(parts) {
+    if (!this.guardedRead || !this.guardVerified || !this.guardProof) return new Set();
+    let content;
+    try { content = await this.readFileImpl(this.guardProof.audit, 'utf8'); }
+    catch { return new Set(); }
+    if (Buffer.byteLength(content) > 1_000_000) return new Set();
+    const records = new Set();
+    for (const line of content.split('\n')) {
+      if (!line || line.length > 1024) continue;
+      try {
+        const item = JSON.parse(line);
+        if (item.nonce === this.guardProof.nonce
+          && typeof item.callID === 'string' && typeof item.sessionID === 'string'
+          && typeof item.tool === 'string') {
+          records.add(JSON.stringify([item.sessionID, item.callID, item.tool]));
+        }
+      } catch { /* Incomplete append: never count as a denial. */ }
+    }
+    return new Set(parts.filter(part => part.type === 'tool' && part.state?.status === 'error'
+      && typeof part.callID === 'string' && typeof part.sessionID === 'string'
+      && records.has(JSON.stringify([part.sessionID, part.callID, part.tool])))
+      .map(part => part.id));
+  }
+
   async verifyGuard() {
     if (!this.guardedRead) return true;
     if (this.guardVerified) return true;
@@ -200,6 +224,7 @@ export class OpenCodeService {
       this.guardProof = {
         marker: path.join(root, 'dsh-guard-' + randomBytes(16).toString('hex') + '.ready'),
         nonce: randomBytes(32).toString('hex'),
+        audit: path.join(root, 'dsh-guard-' + randomBytes(16).toString('hex') + '.jsonl'),
       };
       this.guardVerified = false;
     }
@@ -216,6 +241,7 @@ export class OpenCodeService {
     if (this.guardProof) {
       childEnv.DSH_OPENCODE_GUARD_MARKER = this.guardProof.marker;
       childEnv.DSH_OPENCODE_GUARD_NONCE = this.guardProof.nonce;
+      childEnv.DSH_OPENCODE_GUARD_AUDIT = this.guardProof.audit;
     }
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
@@ -277,7 +303,10 @@ export class OpenCodeService {
     const child = this.owned;
     this.owned = null;
     this.readyOwned = false;
-    if (proof) await this.rmImpl(proof.marker, { force: true }).catch(() => {});
+    if (proof) {
+      await this.rmImpl(proof.marker, { force: true }).catch(() => {});
+      await this.rmImpl(proof.audit, { force: true }).catch(() => {});
+    }
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     let done = false;
     const exited = new Promise(resolve => {
