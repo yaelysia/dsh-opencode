@@ -32,4 +32,4 @@ jobs:
           node-version: 24
       # Exercise the actual published DSH adapter imports, not only our mock fetch.
       - run: npm install --no-save --ignore-scripts --no-audit --no-fund @deepseek-ai/cordis@4.0.5 @deepseek-ai/schemastery@3.18.5 @deepseek-ai/dsh-llm@0.2.1-rc.2
-      - run: node --test integration/entrypoint.test.js
+      - run: node --test integration/entrypoint-smoke.mjs
