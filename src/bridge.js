@@ -281,7 +281,16 @@ export class OpenCodeServeClient {
           const history = await this.request(
             '/session/' + encodeURIComponent(session.id) + '/message?limit=80',
             undefined, options?.signal, 'GET');
-          const authoritative = nativePartsForTurn(history, response.info.id);
+          let authoritative;
+          try {
+            authoritative = nativePartsForTurn(history, response.info.id);
+          } catch (error) {
+            if (error.code !== 'NATIVE_TOOL_HISTORY_UNAVAILABLE' || attempt === 2) throw error;
+            // OpenCode can acknowledge /message before all assistant parts
+            // become visible through its read-only history endpoint.
+            await new Promise(resolve => setTimeout(resolve, 120));
+            continue;
+          }
           const byId = new Map(authoritative.map(part => [part.id, part]));
           // If an SSE/final tool event vanished from history, never proceed
           // as if no tool was requested.

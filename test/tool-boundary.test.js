@@ -452,3 +452,29 @@ test('DSH can discover a guarded native tool from the current prompt history eve
   assert.equal(histories, 2, 'one read-only history query per tool-enabled prompt');
   assert.equal(prompts, 2, 'history lookup never triggers additional model calls');
 });
+
+test('a briefly missing final assistant message is retried without resending the model prompt', async () => {
+  const guarded = intercepted('read', { filePath: 'test.txt' });
+  guarded.id = 'part-retry'; guarded.messageID = 'assistant-mid'; guarded.sessionID = 'server-retry';
+  let reads = 0, prompts = 0;
+  const fetchMock = async (url, init) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'server-retry' });
+    if (init.method === 'GET') {
+      reads++;
+      return Response.json(reads === 1 ? [] : [
+        { info: { role: 'user', id: 'user-retry' }, parts: [] },
+        { info: { role: 'assistant', id: 'assistant-mid' }, parts: [guarded] },
+        { info: { role: 'assistant', id: 'assistant-final' },
+          parts: [{ type: 'text', text: 'done' }] },
+      ]);
+    }
+    prompts++;
+    return Response.json({ info: { id: 'assistant-final', modelID: model },
+      parts: [{ type: 'text', text: 'done' }] });
+  };
+  const client = new OpenCodeServeClient({ guardedReadCompatibility: true }, fetchMock);
+  const response = await client.complete({ model, tools: hostTools, messages: [user] });
+  assert.equal(response.dshToolCall.name, 'read');
+  assert.equal(reads, 2);
+  assert.equal(prompts, 1);
+});
