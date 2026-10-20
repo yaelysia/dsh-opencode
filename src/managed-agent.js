@@ -45,6 +45,8 @@ export function managedAgentEnvironment(env, agentId = BRIDGE_AGENT_ID, root) {
   if (root) result.XDG_CONFIG_HOME = path.join(root, 'dsh-isolated-config');
   result.OPENCODE_CONFIG_CONTENT = JSON.stringify({
     agent: { [agentId]: managedAgentDefinition() },
+    // Enforce deny-all even if a request selects another built-in agent.
+    permission: { '*': 'deny' },
     plugin: [], mcp: {},
   });
   return result;
