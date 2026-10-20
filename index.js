@@ -38,6 +38,7 @@ export function apply(ctx, config) {
   const provider = config.providerId || 'opencode-serve';
   ctx.llm.registerAdapter([provider], new ModelAdapter({
     ...config,
+    passwordProvider: () => supervisor.passwordForClient(),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
       requireManaged: config.strictOwnedServer !== false || requireManaged === true,
     }),
