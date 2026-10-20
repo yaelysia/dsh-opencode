@@ -7,7 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { OpenCodeService } from '../src/service.js';
 
-test('official OpenCode 1.19.3 registers the DSH guard before accepting model traffic', { timeout: 90000 }, async () => {
+// Windows GitHub runners sometimes spend >45 s initializing the official
+// OpenCode binary before its /agent route becomes responsive. Keep production
+// readiness timeouts unchanged; only give this smoke test a cold-start budget.
+const windows = process.platform === 'win32';
+test('official OpenCode 1.19.3 registers the DSH guard before accepting model traffic', { timeout: windows ? 180000 : 90000 }, async () => {
   const executable = process.env.OPENCODE_TEST_EXE;
   assert.ok(executable, 'OPENCODE_TEST_EXE is required');
   const probe = createServer();
@@ -21,7 +25,7 @@ test('official OpenCode 1.19.3 registers the DSH guard before accepting model tr
     opencodeExecutable: path.resolve(executable),
     runtimeRoot: root,
     guardedReadCompatibility: true,
-    autoStartTimeoutMs: 45000,
+    autoStartTimeoutMs: windows ? 120000 : 45000,
     autoStartDirect: true,
   }, { logger: { info() {}, warn() {} } });
   try {
