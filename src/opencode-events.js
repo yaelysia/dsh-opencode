@@ -68,6 +68,7 @@ export class SessionEventAccumulator {
     this.text = '';
     this.nativeToolSeen = false;
     this.nativeToolParts = new Map();
+    this.nativeToolExecuted = false;
   }
 
   accept(raw) {
@@ -90,6 +91,11 @@ export class SessionEventAccumulator {
     // limiting them to the first assistant would miss later tool events.
     if (type === 'message.part.updated' && part?.type === 'tool') {
       this.nativeToolSeen = true;
+      if (part.state?.status === 'completed' || part.metadata?.providerExecuted === true
+        || part.state?.metadata?.providerExecuted === true) {
+        // Never erase evidence of execution if later SSE snapshots revise it.
+        this.nativeToolExecuted = true;
+      }
       if (typeof part.id === 'string') this.nativeToolParts.set(part.id, part);
       return;
     }

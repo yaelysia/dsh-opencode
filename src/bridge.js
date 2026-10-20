@@ -229,6 +229,11 @@ export class OpenCodeServeClient {
       // terminal denial from our confirmed native guard can carry intent into
       // DSH. Provider-executed, unknown or successful tool events still fail.
       const observed = [...(collector?.nativeToolParts.values() ?? [])];
+      if (collector?.nativeToolExecuted || observed.some(part =>
+        part.state?.status === 'completed' || part.metadata?.providerExecuted === true
+          || part.state?.metadata?.providerExecuted === true)) {
+        throw failure('OpenCode native tool may have executed', 'OPENCODE_TOOL_BOUNDARY');
+      }
       const finalParts = response.parts.filter(nativeToolPart);
       const native = new Map();
       for (const part of observed) native.set(part.id, part);
@@ -244,14 +249,6 @@ export class OpenCodeServeClient {
       if (needsHistory) {
         if (!this.guardedReadCompatibility) {
           throw failure('Unverified OpenCode native tool activity', 'OPENCODE_TOOL_BOUNDARY');
-        }
-        // Do not allow even a transient provider-executed event to be
-        // rewritten as a denied event by later history snapshots.
-        for (const part of observed) {
-          if (part.state?.status === 'completed' || part.metadata?.providerExecuted
-            || part.state?.metadata?.providerExecuted) {
-            throw failure('OpenCode native tool may have executed', 'OPENCODE_TOOL_BOUNDARY');
-          }
         }
         const wanted = new Set([...native.values()].map(part => part.messageID).filter(Boolean));
         if (response.info?.id && finalParts.length) wanted.add(response.info.id);

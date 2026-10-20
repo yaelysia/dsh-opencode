@@ -522,3 +522,29 @@ test('mismatched or missing authoritative native tool identity fails closed', as
   await job;
   assert.equal(history.reads, 3);
 });
+
+test('an SSE executed-tool event cannot be rewritten as a harmless guard denial', async () => {
+  const executed = {
+    type: 'tool', id: 'tool-execution-attempt', sessionID, messageID: assistantID,
+    tool: 'write', state: { status: 'completed',
+      input: { filePath: 'file.txt', content: 'bad' }, output: 'wrote file' },
+  };
+  const denied = { ...executed, state: { status: 'error',
+    input: { filePath: 'file.txt', content: 'bad' },
+    error: 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED' } };
+  const upstream = fixture({ responseParts: [denied], plan({ send }) {
+    send('message.part.updated', { sessionID, part: executed });
+    send('message.part.updated', { sessionID, part: denied });
+  } });
+  const tools = [{ name: 'write', description: 'DSH-only write',
+    parameters: { type: 'object', properties: {
+      file_path: { type: 'string' }, content: { type: 'string' },
+    }, required: ['file_path', 'content'] } }];
+  const task = assert.rejects(async () => consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, upstream.fetch), { tools })), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  await upstream.posted;
+  await sleep(25);
+  upstream.finish();
+  await task;
+});
