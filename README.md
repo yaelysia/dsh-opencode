@@ -2,13 +2,45 @@
 
 通过本地 [OpenCode 官方服务](https://opencode.ai/docs/server/) 接入 DSH 原生模型选择器。
 
-**0.1.5 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+**0.2.0-alpha.1 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+
+## 0.2.0-alpha.1：DSH 工具权限边界（实验性）
+
+这一版改变了**工具执行的权力归属**：OpenCode 官方服务只负责模型推理，不得执行文件、Shell、网络或其他内建工具。所有获准工具调用必须由 DSH 接管。
+
+### 安全约束
+
+- 只在插件自己启动的 OpenCode 子进程中启用 `dsh-bridge`，将**所有 agent 的 OpenCode 原生工具权限统一设置为 `* = deny`**。隔离子进程的 OpenCode 配置目录，禁止继承项目配置、普通 OpenCode 插件和 MCP；只保留既有数据/鉴权目录。不会改用户全局设置。
+- 为本地 OpenCode 服务生成仅存在于插件进程内的随机 Basic Auth 密码，未经认证的 `127.0.0.1:4096` 请求会返回 401。出于安全考虑，新的 Desktop 自动服务不能再用无认证的 `Invoke-RestMethod .../global/health` 直接测试。
+- `strictOwnedServer` 默认开启：**不允许模型请求复用未经插件管理的既有 OpenCode 进程**，避免那个进程带有不受控的权限或插件。要切换新版本，先停止旧的 `opencode serve`，再重启 DSH Desktop。
+- 对 DSH 传入的每个工具名称做精确白名单检查。模型的格式错误、未声明工具、截断工具请求，以及 OpenCode 服务返回的任何原生工具事件都被标记为失败，不会提交为一个“成功调用”。
+
+### 工具调用方式与限制
+
+**该版本采用结构化文本工具协议，而不是原生 OpenAI tool_calls。** 因为 OpenCode `serve` 的会话消息 API 不接受 DSH 每轮动态传入的任意工具函数定义，插件会把 DSH 当前允许的工具名称、描述和 JSON Schema 传给模型。模型若需要工具，必须输出严格的一条 `DSH_TOOL_CALL_V1` JSON 请求；插件只把它翻译成 DSH 的 `tool-call` 流块，**不执行工具**。DSH 原生工具运行时决定是否允许、要求审批、执行或拒绝；其结果按 callId 回传下一轮模型。一次模型响应只支持一个工具调用。
+
+这是第一版实验性工具协议：模型可能无法稳定输出所需格式，真实 DSH 工具授权/拒绝的端到端效果还需在 Desktop 上测试。请先用只读工具验证，再验证拒绝路径；不要在此版本上运行重要的不可逆命令。
+
+| 新配置 | 默认值 | 行为 |
+|---|---|---|
+| `toolBridgeEnabled` | `true` | 启用严格 DSH 工具协议；关闭时 DSH 传入工具直接报错，不会默默忽略 |
+| `strictOwnedServer` | `true` | 只允许插件管理的隔离本地服务参与模型调用；工具请求无论如何都必须使用托管服务 |
+
+### 实测步骤
+
+1. DSH Desktop 插件页更新为新提交，确认版本 `0.2.0-alpha.1`，完整退出 DSH。
+2. 先停止旧版本手动/自动留存的 `opencode serve`（4096 端口）；重启 DSH，让插件自己启动加密且隔离的服务。
+3. 新会话先问「只回答 1」，确保纯文本推理没退化。
+4. 在 DSH 开启只读文件工具，并请求读取工作区内你指定的一个测试文件。Trajectory 应显示**DSH 工具调用**及其执行结果，模型再继续回答。
+5. 将相关 DSH 工具设为需要批准或拒绝，确认拒绝时不会修改文件，也不会调用 OpenCode 原生工具。检查 Wire Trace 是否只有本机 `/session` 请求。
+
+如报 `UNTRUSTED_OPENCODE_SERVER`，说明 4096 上已存在插件之外启动的服务；先关掉旧进程，重新启动 DSH。若模型持续无法触发工具，说明结构化文本协议的模型遵循性不足，需改进协议而不是放宽 OpenCode 原生权限。旧版 `0.1.5` 可通过此前固定 SHA 回退。
 
 ## 0.1.5：避免 OpenCode 自带的 Plan/Build 角色提示
 
 上一版使用内置 `plan` agent；OpenCode 会把默认 AI 编程助手角色及 Plan 模式限制一同提供给模型，使 DSH 中的正常聊天出现“当前处于 Plan 模式”之类回答。
 
-0.1.5 默认改成**专用 `dsh-bridge` agent**。插件仅向它自己启动的 OpenCode 子进程设置 `OPENCODE_CONFIG_CONTENT`，注册一个自定义 primary agent：用简短的“遵循本次 system/user 指令、直接回答、不附加 OpenCode 角色和 Plan/Build 流程”提示替换默认角色模板；默认禁止工具执行，保留只读 `read` 兼容权限（免费车道可能需要此类工具声明）。OpenCode 在独立空工作目录中启动，外部文件读取权限仍受限制。DSH 的系统提示通过原有 `system` 字段发送。
+0.1.5 默认改成**专用 `dsh-bridge` agent**。插件仅向它自己启动的 OpenCode 子进程设置 `OPENCODE_CONFIG_CONTENT`，注册一个自定义 primary agent：用简短的“遵循本次 system/user 指令、直接回答、不附加 OpenCode 角色和 Plan/Build 流程”提示替换默认角色模板；默认禁止所有 OpenCode 内部工具执行；DSH 工具通过上面的结构化文本协议转发。OpenCode 在独立空工作目录中启动，外部文件读取权限仍受限制。DSH 的系统提示通过原有 `system` 字段发送。
 
 配置仅存在于被插件启动的子进程环境中，**不会编辑 OpenCode 全局配置、用户其他工作目录或 DSH 已保存的聊天**。插件现有普通文本对话、标题生成与自动服务管理不变。
 
@@ -99,7 +131,7 @@ node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
 
 已确认独立 OpenCode 可以生成文本后，直接安装/更新插件；0.1.4 无需提前手动启动服务。
 
-**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用下面的 Git 来源安装/更新，确认安装版本为 `0.1.5` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
+**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用 Git 来源安装/更新，确认安装版本为 `0.2.0-alpha.1` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
 
 ```text
 git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
