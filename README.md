@@ -25,7 +25,7 @@ DSH Agent
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
 - **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
-- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信、provider 侧已经执行或一次生成多个请求仍报错。
+- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
 - **SSE 最终纠正**：`/event` 增量是预览，完整 `/message` 响应才是最终文本。当两者不一致时由 DSH `block-end` 纠正内容，不会在成功生成后抛出 `STREAM_MISMATCH`。诊断只记录字符数，不记录正文。
 - 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
 - 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
@@ -35,7 +35,7 @@ DSH Agent
 
 ### 目前限制
 
-- 工具调用仍使用**实验性单条文本协议** `DSH_TOOL_CALL_V1:{"name":"...","arguments":{...}}`，或在受保护模式下处理一次经守卫拒绝的原生工具意图，并非完整原生 Function Calling。一次模型响应只能交付一个 DSH 工具请求；若产生多个原生请求会拒绝本轮，而非默许批量执行。
+- 工具调用仍使用**实验性单条文本协议** `DSH_TOOL_CALL_V1:{"name":"...","arguments":{...}}`，或在受保护模式下处理一次经守卫拒绝的原生工具意图，并非完整原生 Function Calling。一次模型响应只能交付一个 DSH 工具请求；多个被拦截的原生请求按顺序只选第一个，绝不批量执行。
 - **流式输出依赖 OpenCode SSE 实际提供文本事件。** 如果 OpenCode 只发送心跳、事件接口失效或丢失增量，插件会等待 `/message` 的最终回复，不伪造逐 token 输出。OpenCode 1.18.x 曾出现 SSE 丢事件问题，1.19.3 的真实 Desktop 表现仍需验收。
 - 工具协议 JSON 前缀和后续参数会被缓冲；受守卫拒绝的原生工具意图也须完整验证、匹配当轮 DSH schema。只有检查通过才向 DSH 发送 `tool-call`，绝不把半截 JSON 当成已批准操作。
 - OpenCode `serve` 消息接口不直接接收动态 DSH 工具函数定义；温度、停止序列、最大输出 token 等请求控制目前也没有完整的原生映射，不应依赖它们得到精确语义。
@@ -139,7 +139,7 @@ node .\scripts\doctor.mjs --stream-probe
 | `MODEL_NOT_FOUND` / `MODEL_MISMATCH` | 服务缺少指定模型，或服务返回了其他模型 |
 | `INVALID_TOOL_CALL` / `UNDECLARED_TOOL_CALL` | 模型未按协议输出，或请求了 DSH 未声明的工具 |
 | `OPENCODE_TOOL_BOUNDARY` | 收到未验证为本地守卫拒绝的原生工具事件，或存在 provider 侧执行迹象；仍坚决拒绝 |
-| `GUARDED_TOOL_UNMAPPED` / `GUARDED_TOOL_BATCH` | 安全拦截正常，但原生工具请求无法明确对应当前 DSH 工具定义，或一次请求有多个工具意图；不会执行任何工具 |
+| `GUARDED_TOOL_UNMAPPED` | 安全拦截正常，但第一个原生工具请求无法明确对应当前 DSH 工具定义；不会执行任何工具 |
 | `SSE_NO_DELTAS` | 显式流式探针没有收到任何助手文本事件；检查 OpenCode 版本与其 SSE 发布情况 |
 | `CLIENT_RESTRICTED` | 上游明确拒绝该免费模型请求；可能由服务端免费模型策略、版本或工具权限配置触发。关闭 SSE 不保证解决；不能为了让请求通过而开放 OpenCode 原生工具权限 |
 

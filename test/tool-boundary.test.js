@@ -297,3 +297,22 @@ test('a guarded OpenCode request with an undeclared target is not dispatched', a
   await assert.rejects(client.complete({ model, tools: hostTools.filter(t => t.name !== 'write'),
     messages: [user] }), error => error.code === 'GUARDED_TOOL_UNMAPPED');
 });
+
+test('several verified guarded native intents are sequenced one per DSH round', async () => {
+  const native = [
+    intercepted('glob', { pattern: '*' }),
+    { ...intercepted('write', { filePath: 'text.txt', content: 'ok' }),
+      id: 'native-second', callID: 'second-call' },
+  ];
+  const server = mockServer([native]);
+  const logs = [];
+  const client = new OpenCodeServeClient({
+    guardedReadCompatibility: true, logger: { warn: message => logs.push(message) },
+  }, server.fetch);
+  const result = await client.complete({ model, tools: hostTools, messages: [user] });
+  assert.equal(result.dshToolCall.name, 'glob');
+  assert.deepEqual(JSON.parse(result.dshToolCall.arguments), { pattern: '*' });
+  assert.ok(logs.some(message => message.includes('forwarding only the first')),
+    'no other guarded intent was silently routed');
+  assert.equal(server.calls.length, 2, 'no extra tool execution request');
+});

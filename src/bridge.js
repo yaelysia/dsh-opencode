@@ -231,14 +231,18 @@ export class OpenCodeServeClient {
       const text = response.parts.filter(p => p?.type === 'text').map(p => p.text ?? '').join('');
       let dshToolCall = parseToolRequest(text, tools);
       if (guardedCalls.length && !dshToolCall) {
-        if (guardedCalls.length !== 1) {
-          throw failure('OpenCode attempted multiple guarded native tools in one turn; '
-            + 'a single DSH call cannot represent the batch', 'GUARDED_TOOL_BATCH');
-        }
+        // OpenCode may attempt multiple tools in one generation. The native
+        // guard denied ALL of them; submit only the FIRST eligible intent to
+        // DSH so the agent can sequence the rest after seeing its real result.
+        // A batch never directly executes or silently authorizes later calls.
         dshToolCall = translateGuardedTool(guardedCalls[0], tools);
         if (!dshToolCall) {
-          throw failure('The blocked OpenCode tool has no matching declared DSH tool or '
-            + 'compatible argument schema', 'GUARDED_TOOL_UNMAPPED');
+          throw failure('The first blocked OpenCode tool has no matching declared DSH tool '
+            + 'or compatible argument schema', 'GUARDED_TOOL_UNMAPPED');
+        }
+        if (guardedCalls.length > 1) {
+          this.logger?.warn?.('dsh-opencode: ' + guardedCalls.length
+            + ' guarded native tool intents; forwarding only the first to DSH');
         }
       }
       if (!text.trim() && !dshToolCall) {
