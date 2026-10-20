@@ -142,3 +142,25 @@ test('tool results explicitly retain DSH call IDs and error information', () => 
   assert.match(text, /error=true/);
   assert.match(text, /denied/);
 });
+
+
+test('max-token truncated model output never dispatches a tool call', async () => {
+  const client = new OpenCodeServeClient({}, async url => Response.json(
+    url.endsWith('/session') ? { id: 'ses-truncated' } : {
+      info: { modelID: model, finish: 'length' }, parts: [{ type: 'text', text: callText }],
+    }));
+  await assert.rejects(
+    () => client.complete({ model, tools, messages: [user] }),
+    error => error.code === 'INCOMPLETE_TOOL_CALL',
+  );
+});
+
+test('unmanaged service requirements are propagated before a tool request', async () => {
+  let required = null;
+  const server = mockServer([[{ type: 'text', text: '1' }]]);
+  const client = new OpenCodeServeClient({
+    ensureService: async options => { required = options; },
+  }, server.fetch);
+  await client.complete({ model, tools, messages: [user] });
+  assert.equal(required.requireManaged, true);
+});
