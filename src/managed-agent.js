@@ -1,57 +1,51 @@
-/** Only the managed OpenCode child receives this configuration. */
-export const BRIDGE_AGENT_ID = 'dsh-bridge';
+import path from 'node:path';
 
+export const BRIDGE_AGENT_ID = 'dsh-bridge';
 export const BRIDGE_PROMPT = [
   'Follow the supplied system instructions and user messages.',
-  'Respond directly to the task. Do not introduce a separate OpenCode identity,',
-  'Plan/Build workflow, or instructions to switch to another mode.',
-  'Do not invoke tools; DSH owns tool access and permission decisions.',
+  'You are acting as a text-only model transport for DeepSeek Harness.',
+  'Do not perform OpenCode tool execution or introduce OpenCode Plan/Build flows.',
+  'DSH is the only authority for tool approval and execution.',
 ].join(' ');
 
-/**
- * OpenCode v1.19.3 accepts OPENCODE_CONFIG_CONTENT with an agent object.
- * An agent.prompt replaces the default provider persona, not the per-request
- * system field from DSH. Keep one read-only compatibility tool: the upstream
- * free-tier gate may reject requests without an agent tool definition.
- */
 export function managedAgentDefinition() {
   return {
     description: 'Text-only bridge for DeepSeek Harness.',
     mode: 'primary',
     prompt: BRIDGE_PROMPT,
-    permission: {
-      '*': 'deny',
-      read: 'allow',
-      external_directory: 'deny',
-    },
+    permission: { '*': 'deny' },
   };
 }
 
-function record(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** Merge with pre-existing process config without mutating the input. */
-export function managedAgentEnvironment(env, agentId = BRIDGE_AGENT_ID) {
+/**
+ * Do not inherit global OpenCode plugins/agent/tool permissions into the DSH
+ * model transport. Auth/data remain in the existing XDG_DATA_HOME.
+ */
+export function managedAgentEnvironment(env, agentId = BRIDGE_AGENT_ID, root) {
   if (agentId !== BRIDGE_AGENT_ID) return { ...env };
-  let config = {};
-  const raw = env.OPENCODE_CONFIG_CONTENT;
-  if (raw) {
-    try { config = JSON.parse(raw); }
-    catch { throw new Error('OPENCODE_CONFIG_CONTENT must be valid JSON to add the DSH agent'); }
-    if (!record(config)) throw new Error('OPENCODE_CONFIG_CONTENT must be a JSON object');
+  if (env.OPENCODE_CONFIG_CONTENT) {
+    let existing;
+    try { existing = JSON.parse(env.OPENCODE_CONFIG_CONTENT); }
+    catch { throw new Error('OPENCODE_CONFIG_CONTENT must be valid JSON'); }
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      throw new Error('OPENCODE_CONFIG_CONTENT must be a JSON object');
+    }
+    if (existing.agent !== undefined && (typeof existing.agent !== 'object'
+      || existing.agent === null || Array.isArray(existing.agent))) {
+      throw new Error('OPENCODE_CONFIG_CONTENT.agent must be an object');
+    }
+    if (Object.hasOwn(existing.agent ?? {}, agentId)) {
+      throw new Error('OpenCode already has a config entry named ' + agentId);
+    }
   }
-  if (config.agent !== undefined && !record(config.agent)) {
-    throw new Error('OPENCODE_CONFIG_CONTENT.agent must be an object');
-  }
-  if (Object.hasOwn(config.agent ?? {}, agentId)) {
-    throw new Error('OpenCode already has a config entry named ' + agentId);
-  }
-  return {
-    ...env,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({
-      ...config,
-      agent: { ...(config.agent ?? {}), [agentId]: managedAgentDefinition() },
-    }),
-  };
+  const result = { ...env };
+  delete result.OPENCODE_CONFIG;
+  delete result.OPENCODE_CONFIG_DIR;
+  result.OPENCODE_DISABLE_PROJECT_CONFIG = '1';
+  if (root) result.XDG_CONFIG_HOME = path.join(root, 'dsh-isolated-config');
+  result.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+    agent: { [agentId]: managedAgentDefinition() },
+    plugin: [], mcp: {},
+  });
+  return result;
 }
