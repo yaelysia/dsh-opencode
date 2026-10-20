@@ -1,207 +1,149 @@
 # dsh-opencode
 
-通过本地 [OpenCode 官方服务](https://opencode.ai/docs/server/) 接入 DSH 原生模型选择器。
+通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**0.2.0-alpha.1 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。DSH 工具调用已通过实验性单次文本协议进行双向转换，但尚未完成真实 Desktop 工具授权闭环验证，也没有真正的逐 token 输出。
+**当前版本：`0.2.0-alpha.1`（实验性）。** 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
-## 0.2.0-alpha.1：DSH 工具权限边界（实验性）
+## 工作原理
 
-这一版改变了**工具执行的权力归属**：OpenCode 官方服务只负责模型推理，不得执行文件、Shell、网络或其他内建工具。所有获准工具调用必须由 DSH 接管。
-
-### 安全约束
-
-- 只在插件自己启动的 OpenCode 子进程中启用 `dsh-bridge`，将**所有 agent 的 OpenCode 原生工具权限统一设置为 `* = deny`**。隔离子进程的 OpenCode 配置目录，禁止继承项目配置、普通 OpenCode 插件和 MCP；只保留既有数据/鉴权目录。不会改用户全局设置。
-- 托管服务及手动诊断脚本均生成独立随机 Basic Auth 密码，未经认证的 `127.0.0.1:4096` 请求会返回 401。出于安全考虑，新的 Desktop 自动服务不能再用无认证的 `Invoke-RestMethod .../global/health` 直接测试。
-- `agent` 固定为 `dsh-bridge`：托管服务和模型适配器均拒绝内置 `plan`/`build` 或任意自定义 Agent（`BRIDGE_AGENT_REQUIRED`），防止通过配置绕开原生工具权限隔离。托管服务每次生成新的随机 Basic Auth 密码，不使用父进程既有的密码；`passwordEnv` 仅用于连接外部手动启动的服务，托管子进程始终通过 OpenCode 官方的 `OPENCODE_SERVER_PASSWORD` 环境变量接收随机凭据。
-- `strictOwnedServer` 默认开启：**不允许模型请求复用未经插件管理的既有 OpenCode 进程**，避免那个进程带有不受控的权限或插件。要切换新版本，先停止旧的 `opencode serve`，再重启 DSH Desktop。
-- 对 DSH 传入的每个工具名称做精确白名单检查。模型的格式错误、未声明工具、截断工具请求，以及 OpenCode 服务返回的任何原生工具事件都被标记为失败，不会提交为一个“成功调用”。
-
-### 工具调用方式与限制
-
-**该版本采用结构化文本工具协议，而不是原生 OpenAI tool_calls。** 因为 OpenCode `serve` 的会话消息 API 不接受 DSH 每轮动态传入的任意工具函数定义，插件会把 DSH 当前允许的工具名称、描述和 JSON Schema 传给模型。模型若需要工具，必须输出严格的一条 `DSH_TOOL_CALL_V1` JSON 请求；插件只把它翻译成 DSH 的 `tool-call` 流块，**不执行工具**。DSH 原生工具运行时决定是否允许、要求审批、执行或拒绝；其结果按 callId 回传下一轮模型。一次模型响应只支持一个工具调用。
-
-这是第一版实验性工具协议：模型可能无法稳定输出所需格式，真实 DSH 工具授权/拒绝的端到端效果还需在 Desktop 上测试。请先用只读工具验证，再验证拒绝路径；不要在此版本上运行重要的不可逆命令。
-
-| 新配置 | 默认值 | 行为 |
-|---|---|---|
-| `toolBridgeEnabled` | `true` | 启用严格 DSH 工具协议；关闭时 DSH 传入工具直接报错，不会默默忽略 |
-| `strictOwnedServer` | `true` | 只允许插件管理的隔离本地服务参与模型调用；工具请求无论如何都必须使用托管服务 |
-
-### 实测步骤
-
-1. DSH Desktop 插件页更新为新提交，确认版本 `0.2.0-alpha.1`，完整退出 DSH。
-2. 先停止旧版本手动/自动留存的 `opencode serve`（4096 端口）；重启 DSH，让插件自己启动加密且隔离的服务。
-3. 新会话先问「只回答 1」，确保纯文本推理没退化。
-4. 在 DSH 开启只读文件工具，并请求读取工作区内你指定的一个测试文件。Trajectory 应显示**DSH 工具调用**及其执行结果，模型再继续回答。
-5. 将相关 DSH 工具设为需要批准或拒绝，确认拒绝时不会修改文件，也不会调用 OpenCode 原生工具。检查 Wire Trace 是否只有本机 `/session` 请求。
-
-如报 `UNTRUSTED_OPENCODE_SERVER`，说明 4096 上已存在插件之外启动的服务；先关掉旧进程，重新启动 DSH。若模型持续无法触发工具，说明结构化文本协议的模型遵循性不足，需改进协议而不是放宽 OpenCode 原生权限。旧版 `0.1.5` 可通过此前固定 SHA 回退。
-
-## 0.1.5：避免 OpenCode 自带的 Plan/Build 角色提示
-
-上一版使用内置 `plan` agent；OpenCode 会把默认 AI 编程助手角色及 Plan 模式限制一同提供给模型，使 DSH 中的正常聊天出现“当前处于 Plan 模式”之类回答。
-
-0.1.5 默认改成**专用 `dsh-bridge` agent**。插件仅向它自己启动的 OpenCode 子进程设置 `OPENCODE_CONFIG_CONTENT`，注册一个自定义 primary agent：用简短的“遵循本次 system/user 指令、直接回答、不附加 OpenCode 角色和 Plan/Build 流程”提示替换默认角色模板；默认禁止所有 OpenCode 内部工具执行；DSH 工具通过上面的结构化文本协议转发。OpenCode 在独立空工作目录中启动，外部文件读取权限仍受限制。DSH 的系统提示通过原有 `system` 字段发送。
-
-配置仅存在于被插件启动的子进程环境中，**不会编辑 OpenCode 全局配置、用户其他工作目录或 DSH 已保存的聊天**。插件现有普通文本对话、标题生成与自动服务管理不变。
-
-**注意：** 自定义 agent 仅替换 OpenCode 的角色模板；官方 `serve` 仍会追加环境等系统上下文，因此不承诺达到完全透明的 raw API。当前版本通过实验性文本协议转发 DSH 工具调用，仍需 Desktop 联测验证。如果必须完全不经过 OpenCode 提示词组装，需要改用真正的模型接口适配器而不是官方 `serve`。
-
-升级前先完全退出 DSH Desktop，确认 4096 端口没有旧版本 OpenCode 服务占用，然后启动更新后的 DSH。如果使用旧 PowerShell 手工运行的 `opencode serve` 或之前插件留下的服务，那个进程没有 `dsh-bridge` agent：新版会返回 `SERVER_AGENT_MISSING`，不会偷偷使用 `plan`。停止旧服务并让新版插件接管即可。
-
-自 0.2.0-alpha.1 起，工具隔离模式不允许切换到内置 `plan`、`build` 或其他 Agent。修改 `agent` 字段会显式报 `BRIDGE_AGENT_REQUIRED`。
-
-## 0.1.4：打开 DSH 后自动运行 OpenCode
-
-默认启用自动管理。插件加载时首先检查 `http://127.0.0.1:4096/global/health`，已有健康服务会直接复用；否则在端口空闲时从独立安装位置启动 `opencode.exe serve`。启动不弹出额外窗口，无需用户先执行 `scripts/start.mjs`；插件卸载时仅结束它自己启动的进程。
-
-自动启动仅支持 HTTP 127.0.0.1 入口。端口被其他进程占用但不是健康 OpenCode 时返回 `SERVER_PORT_BUSY`；未找到可执行文件时返回 `SERVER_NOT_INSTALLED`。启动期间不自动发送任何免费模型生成请求。
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `autoStart` | `true` | 自动启动或复用本地服务 |
-| `autoStartDirect` | `true` | 仅移除新进程的 HTTP(S)/ALL_PROXY 环境变量，不修改系统代理或 VPN/TUN |
-| `opencodeExecutable` | 空（自动定位） | Windows 默认 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe` |
-| `runtimeRoot` | 空（自动定位） | 默认 `%LOCALAPPDATA%\OpenCodeRuntime` |
-| `autoStartTimeoutMs` | `15000` | 本地启动等待上限（毫秒） |
-
-**更新插件后重启 DSH Desktop。** 如果你之前手动启动的服务仍在运行，新版会复用它。测试自动启动时，先在旧窗口按 Ctrl+C 停止旧服务，再重启 DSH。关闭 DSH 会结束插件启动的 OpenCode，但不会结束手动启动的服务。
-
-## 清理失败的 npm 安装（不影响独立版 OpenCode）
-
-先在 PowerShell 卸载残留 npm 包；再只清理指向 `opencode-ai` 的三个 shim 和旧包目录：
-
-```powershell
-npm uninstall -g opencode-ai
-
-$npmBin = Join-Path $env:APPDATA 'npm'
-$oldPackage = Join-Path $npmBin 'node_modules\opencode-ai'
-foreach ($name in @('opencode', 'opencode.cmd', 'opencode.ps1')) {
-    $shim = Join-Path $npmBin $name
-    if ((Test-Path -LiteralPath $shim) -and
-        (Select-String -LiteralPath $shim -SimpleMatch 'opencode-ai' -Quiet)) {
-        Remove-Item -LiteralPath $shim -Force
-    }
-}
-if (Test-Path -LiteralPath $oldPackage) {
-    Remove-Item -LiteralPath $oldPackage -Recurse -Force
-}
-Get-Command opencode -All -ErrorAction SilentlyContinue
+```text
+DSH Agent
+  └─ GenerateOptions（系统提示 / 历史消息 / DSH 工具定义）
+       └─ dsh-opencode（LlmAdapter）
+            └─ 本机 OpenCode serve（隔离的 dsh-bridge Agent）
+                 └─ OpenCode 模型推理
+                      ├─ 普通文本 → DSH 回复
+                      └─ DSH_TOOL_CALL_V1 → DSH tool-call
+                                             └─ DSH 授权 / 执行 / 拒绝
+                                                  └─ 工具结果进入下一轮模型请求
 ```
 
-如果仍出现 `EPERM`，先关闭占用旧 npm 目录的程序，必要时重启电脑后重试。不要删除整个 `%APPDATA%\npm`、`%LOCALAPPDATA%\npm-cache`、`%LOCALAPPDATA%\Programs\OpenCodeCLI` 或 `%LOCALAPPDATA%\OpenCodeRuntime`。旧 shim 清理后，独立版 exe 和 DSH 自动启动不受影响。
+**OpenCode 原生工具不具备执行权限。** 托管子进程采用 `permission: { "*": "deny" }`，隔离项目配置、插件、MCP 和其他 Agent。工具请求只转换为 DSH 的 `tool-call` 流块，代码本身不执行工具。
 
-## Windows：先做一次独立链路测试
+### 已实现
 
-已下载独立 `opencode.exe` 的情况下，不必再运行 npm 安装 OpenCode。下载本仓库后，在仓库目录执行：
+- 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
+- DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
+- 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
+- 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
+- 本机随机 Basic Auth、独立运行目录、代理环境变量的子进程级处理。
+- `session-title` 请求本地提取首条有效用户消息（不额外调用云模型）。
 
-```powershell
-node .\scripts\start.mjs --probe
-```
+### 目前限制
 
-默认使用 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe`、端口 `4096`。如果旧的 `opencode serve` 仍在运行，先在它的窗口按 Ctrl+C；脚本不会杀掉占用端口的进程，也不会悄悄换端口。
+- 工具调用使用**实验性单条文本协议** `DSH_TOOL_CALL_V1:{"name":"...","arguments":{...}}`，不是真正的原生 Function Calling。一次模型响应只能请求一个工具；模型未必总能遵守格式。
+- 输出等待 OpenCode 返回整条消息后再转换为 DSH 流块，不是真正逐 token 流式输出。
+- OpenCode `serve` 消息接口不直接接收动态 DSH 工具函数定义；温度、停止序列、最大输出 token 等请求控制目前也没有完整的原生映射，不应依赖它们得到精确语义。
+- 目前只声明文本输入模型；并不提供图像输入/生成能力。
+- 尚未通过真实 DSH Desktop 的授权 UI、允许/拒绝与连续工具调用验收。
 
-若要按 OpenCode 错误提示排除 **代理环境变量** 的影响，执行：
+## 环境要求
 
-```powershell
-node .\scripts\start.mjs --direct --probe
-```
+- DSH `0.2.x`（开发测试对照 `0.2.1-rc.2 Desktop`）。
+- Node.js `>=22.19.0`，或由 DSH Desktop 提供符合要求的 Node 环境。
+- 可运行的 OpenCode 官方 CLI；Windows 默认查找 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe`。其他平台默认从 `PATH` 查找 `opencode`。
 
-`--direct` 仅清除新启动 OpenCode 进程继承的 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY，保留其他程序的代理和系统设置。NO_PROXY 补上本地回环地址。**它不会关闭系统 VPN/TUN、改变公网 IP 或解除服务端封禁。** 网络策略要求使用代理时不要加此选项。
+## 安装与升级
 
-脚本还会：
-
-- 为未设置的 XDG 目录使用 `%LOCALAPPDATA%\OpenCodeRuntime` 下的对应目录，避免默认 `.cache` 的权限问题；已有 XDG 配置不覆盖。
-- 在独立空工作目录启动官方服务，查询健康版本、真实模型目录及 agent，不输出密钥。
-- `--probe` 仅发送一条固定测试消息，默认指定 `deepseek-v4.1-flash-free`；不扫描所有模型、不自动重试、不自动换模型或付费。OpenCode 内部的执行步数由官方服务决定。
-- 写入 `OpenCodeRuntime/opencode-diagnostic-<时间戳>.json`。测试成功时保持服务运行供 DSH 使用；失败时停止本次脚本启动的子进程。
-
-已有服务不需重启时，只诊断它：
-
-```powershell
-node .\scripts\doctor.mjs --probe --out .\opencode-diagnostic.json
-# 不带 --probe：只检查本地健康、模型与 agent，不发送生成请求。
-node .\scripts\doctor.mjs
-# 明确指定另一个测试模型；不会自动切换。
-node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
-```
-
-启动器接受 `--exe "C:\实际路径\opencode.exe"`、`--root`、`--port` 和 `--model`；诊断器接受 `--endpoint`、`--agent`、`--model`、`--out`。不改变现有 OpenCode 账户或全局配置。
-
-## 安装 DSH 插件
-
-已确认独立 OpenCode 可以生成文本后，直接安装/更新插件；0.1.4 无需提前手动启动服务。
-
-**DSH 0.2.1-rc.2 Desktop：** 在桌面应用自己的「插件」页使用 Git 来源安装/更新，确认安装版本为 `0.2.0-alpha.1` 后重启 DSH。Desktop 拥有自己的 profile，不要假定 CLI 的 `--profile desktop` 一定对应正在使用的桌面实例。
+在 DSH Desktop 的插件页面以 Git 来源安装当前 PR 分支：
 
 ```text
 git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 ```
 
-已确认 CLI profile 的用户可以使用 `dsh plugin --profile <实际 profile 名> add <安装来源>`。为固定安装内容，将上述分支名换成经过核对的完整提交 SHA。
+需要复现固定版本时，将分支名替换成 PR 最新的完整 commit SHA。**更新后完整退出并重新启动 DSH Desktop**。
 
-标题修复不需要重新下载、重装或重启已经工作的 OpenCode 服务；保留其服务窗口。
+如 `127.0.0.1:4096` 已被之前手工运行的 `opencode serve` 占用，先在其控制台按 `Ctrl+C` 停止，再启动 DSH。默认安全模式只允许插件启动并拥有的服务，不会接管或杀死未知进程。
 
-模型选择器中的提供商为 `OpenCode (official serve)`，默认包含 `deepseek-v4.1-flash-free` 和 `glm-5.3-flash-free`。这份插件目录是可配置的模型 ID 列表，不是实时可用性保证；诊断器会另外核对 OpenCode 服务的真实目录。
+首次验证建议使用两个默认模型之一：
 
-| 配置 | 默认值 | 说明 |
-|---|---|---|
-| endpoint | http://127.0.0.1:4096 | 官方本地服务 |
-| providerId / backendProviderId | opencode-serve / opencode | DSH / OpenCode 路由 |
-| agent | dsh-bridge | 独立的 DSH 专用 agent，避免内置 Plan 模式角色提示 |
-| models | 两个默认免费模型 | 可选模型 ID |
-| localTitles | true | DSH 标记为 session-title 的请求使用本地短标题，不调用云端 |
-| timeoutMs | 120000 | 单个本地 HTTP 请求期限 |
-| username / passwordEnv | opencode / OPENCODE_SERVER_PASSWORD | 本地服务 Basic Auth；密码仅从环境读取 |
+- `deepseek-v4.1-flash-free`
+- `glm-5.3-flash-free`
 
-## 0.1.3：修复会话标题
+模型 ID 可以配置；出现在下拉列表中**不代表**当前网络和账户一定能成功调用。
 
-0.1.2 的本地标题逻辑错误地截取了标题请求的外层指令，导致侧栏出现 `Generate the session title from...`。DSH 0.2.1-rc.2 实际把人类消息包装成如下输入：
+## 主要配置
 
-```text
-Generate the session title from this JSON array of human messages:
-[{"seq":7,"text":"只回复数字1，不使用工具。"}]
+| 配置项 | 默认值 | 作用 |
+| --- | --- | --- |
+| `endpoint` | `http://127.0.0.1:4096` | 官方本地服务地址 |
+| `providerId` / `backendProviderId` | `opencode-serve` / `opencode` | DSH 与 OpenCode 路由 |
+| `agent` | `dsh-bridge` | **固定安全 Agent**，其他值拒绝 |
+| `autoStart` | `true` | 启动插件时管理本地 OpenCode |
+| `autoStartDirect` | `true` | 只为 OpenCode 子进程清除 HTTP(S)/ALL_PROXY 环境变量；不改变系统 VPN/TUN |
+| `runtimeRoot` | 自动计算 | 独立工作目录与运行数据 |
+| `strictOwnedServer` | `true` | 默认拒绝未托管服务；带 DSH 工具的请求总是要求托管服务 |
+| `toolBridgeEnabled` | `true` | 文本工具协议；关闭后收到 DSH 工具会明确报错 |
+| `localTitles` | `true` | 标题不调用云端模型 |
+| `timeoutMs` | `120000` | 本机模型请求超时（毫秒） |
+| `passwordEnv` | `OPENCODE_SERVER_PASSWORD` | 连接外部手动服务时的环境变量键；托管服务始终生成新的随机密码 |
+
+自动启动的服务绑定 `127.0.0.1`，子进程使用规范变量 `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME`。未认证请求收到 `401` 是预期行为。不会把密码写入 README、日志或诊断报告。
+
+## 诊断
+
+可以在 Windows 的仓库目录独立检查 OpenCode，而不启动 DSH：
+
+```powershell
+node .\scripts\start.mjs --probe
+# 网络环境需要绕开 HTTP(S)/ALL_PROXY 时才加 --direct
+node .\scripts\start.mjs --direct --probe
 ```
 
-现在仅在 `purpose: session-title` 的本地分支中解析这个 JSON，读取真实的 `text`，示例标题为 `只回复数字1，不使用工具。`。也支持更新标题时的 `{ currentTitle, messages }` 格式；已有正常标题保持不变，旧版指令标题会在宿主下次请求更新时重新从人类消息提取。畸形/未知框架返回 `INVALID_TITLE_INPUT`，不把框架指令写成标题。
+该脚本在独立运行目录启动隔离服务、随机生成 Basic Auth 密码、进行健康与模型目录检查；`--probe` 才会对明确指定的免费模型发送一次固定推理请求。完成后生成 `OpenCodeRuntime/opencode-diagnostic-*.json`。
 
-`localTitles: true` 仍然表示**本地首条有效人类消息的短摘录**（最多 40 个 Unicode 码点），不是模型语义总结，不额外调用免费模型。普通聊天、网络路径和模型选择不变。
+**诊断脚本启动的服务不属于 DSH 插件。** 不要将其当作默认安全模式下的 DSH 服务使用；结束诊断后按 `Ctrl+C` 关闭，再让 DSH 自动启动并拥有自己的进程。
 
-**安装更新不会批量改写已保存的标题。** 默认首条消息标题策略可能不会重新生成旧会话标题；新会话使用修复逻辑，旧会话可在 DSH 中手动重命名。
+诊断已有且自己能够认证的手动服务时使用：
 
-## 请求保护与错误处理
+```powershell
+node .\scripts\doctor.mjs
+node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
+```
 
-标题辅助请求不再额外请求模型；主请求串行派发，避免并发创建会话。不同模型/用途的会话隔离，改写历史及失败后不再复用旧游标。系统指令传入官方 `system` 字段。
+手动服务设置了密码时，应在诊断进程环境中提供对应的 `OPENCODE_SERVER_PASSWORD`；随机生成的托管服务密码不会向其他终端公开。
 
-`HTTP 200 + info.error`、空回答及非 2xx 都明确报告失败。网络/客户端拒绝后在插件实例中冷却 60 秒，期间继续返回原失败而不重复发送；**这是减少重复请求，不是等待官方 60 秒后解封**。到期只允许用户新发起的请求，不安排后台自动重试。取消/超时会尽力终止对应 OpenCode 会话。
+### 常见错误
 
-| 错误码 | 区分 |
-|---|---|
-| NETWORK_BLOCKED | 网关明确报告当前网络/IP 的 abusive traffic 限制 |
-| CLIENT_RESTRICTED | 网关明确要求从 OpenCode 内使用 |
-| REGION_RESTRICTED | 明确的地区限制 |
-| FORBIDDEN | 其他或未能细分的 403，不猜原因 |
-| AUTH / RATE_LIMIT | 凭据错误 / 限流 |
-| UPGRADE_REQUIRED | 服务明确要求升级 |
-| MODEL_NOT_FOUND / MODEL_MISMATCH | 服务目录缺少模型 / 返回了不同模型 |
-| EMPTY_RESPONSE / TIMEOUT | 无可见文本 / 本地请求超时 |
-| INVALID_TITLE_INPUT | 本地标题请求框架损坏或不支持，不输出指令标题 |
+| 错误码 | 含义 / 处理 |
+| --- | --- |
+| `UNTRUSTED_OPENCODE_SERVER` | 端口由插件之外的服务占用；关闭旧服务并重启 DSH |
+| `BRIDGE_AGENT_REQUIRED` | 使用了非 `dsh-bridge` Agent；恢复默认配置 |
+| `SERVER_PORT_BUSY` / `SERVER_NOT_INSTALLED` | 检查端口或 OpenCode CLI 路径 |
+| `AUTH` | 本地认证失败；托管服务请重启 DSH，不要使用旧密码 |
+| `NETWORK_BLOCKED` / `CLIENT_RESTRICTED` | OpenCode 网关拒绝，不会绕过限制 |
+| `MODEL_NOT_FOUND` / `MODEL_MISMATCH` | 服务缺少指定模型，或服务返回了其他模型 |
+| `INVALID_TOOL_CALL` / `UNDECLARED_TOOL_CALL` | 模型未按协议输出，或请求了 DSH 未声明的工具 |
+| `OPENCODE_TOOL_BOUNDARY` | 返回了 OpenCode 原生工具事件，插件拒绝该响应 |
 
-错误和诊断保留必要状态，不输出完整 provider/config 数据、认证头或提示词。Wire Trace 只反映 DSH 到本地 OpenCode 的 HTTP 链路，HTTP 200 不等于云端推理成功。
+网络或客户端拒绝后，当前插件实例短时冷却以避免重复请求；冷却不代表网络封禁会自行解除。
 
-## 验证边界
+## 真实 DSH Desktop 验收
 
-`npm test` 使用 Node 原生测试框架，覆盖模拟响应及真实 localhost HTTP 链路。它们不是云端模型测试。Windows 启动与用户出口的实际推理仍需用上述脚本验证；程序不能从别的电脑判断用户当前公网出口是否解除限制。
+本 PR 合并前需要完成以下验证：
 
-当前桥接只输出文本，OpenCode 返回完整消息后才转换成 DSH 分片。OpenCode 内部工具由其自身权限系统管理，不会自动受 DSH 的工具审批覆盖。
+1. 新会话进行不带工具的普通文本问答，确认没有 OpenCode Plan/Build 角色干扰。
+2. 使用 DSH 的**只读**文件工具读取测试文件，在 Trajectory 中确认执行者是 **DSH 工具运行时**。
+3. 手动拒绝一次工具授权，确认未发生 OpenCode 内部执行或文件修改。
+4. 在同一会话中继续提问，核对工具结果、错误标记与连续调用能够正确回传。
+5. 检查错误路径和日志不泄露密码或跨越权限边界。
+
+只读、拒绝、继续三条路径均通过后才取消 Draft 并合并。
+
+## 自动化测试
+
+```bash
+npm test
+npm pack --dry-run --ignore-scripts
+```
+
+GitHub Actions 运行 Windows / Ubuntu × Node.js 22 / 24 单元测试，另在真实发布的 DSH 依赖上验证插件入口加载与注册。模拟服务和 localhost HTTP 测试**不等同于**真实 Desktop 云端联测。
 
 ## 参考
 
-- [OpenCode Network：代理环境变量与本地 NO_PROXY](https://opencode.ai/docs/network/)
-- [OpenCode Server：健康检查、模型目录、会话消息 API](https://opencode.ai/docs/server/)
-- [IP 限制报告 #56853](https://github.com/anomalyco/opencode/issues/56853)：官方机器人回复建议联系 `help@anoma.ly`；没有可据此保证的自动解封期限。
-- [DSH 0.2.1-rc.2 标题请求包装](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/packages/session/session-title-first-prompt-llm/src/index.ts)
-- [DSH 0.2.1-rc.2 多轮标题更新](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/packages/experimental/session-title-all-prompts-llm/src/index.ts)
-- [DSH Bundle 发布规范](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/docs/user/develop/basic/publish.md)
+- [OpenCode Server API](https://docs.opencode.ai/docs/server/)
+- [OpenCode 官方 CLI](https://docs.opencode.ai/docs/cli/)
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+- [DSH 插件适配接口](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/docs/user/develop/practice/llm-adapter.md)
 
-MIT License。
+MIT License.

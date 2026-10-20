@@ -78,7 +78,7 @@ export async function main(args = process.argv.slice(2)) {
     console.log(JSON.stringify(report, null, 2));
     console.log('Diagnostic report:', file);
     if (!report.ok) { console.error('Check failed. No retry or fallback model was used.'); return 1; }
-    console.log('OpenCode is ready at ' + endpoint + '. Keep this window open for DSH; Ctrl+C stops this server.');
+    console.log('Isolated OpenCode diagnostic service ready at ' + endpoint + '. It is not managed by DSH. Ctrl+C stops this server.');
     return (await exited).code ?? 0;
   } finally {
     startup.abort();
