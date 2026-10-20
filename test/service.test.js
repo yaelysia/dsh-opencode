@@ -80,7 +80,11 @@ test('automatically starts real local child and stops only the owned process', a
   const fixture = path.join(root, 'fake-service.mjs');
   await writeFile(fixture, [
     "import { createServer } from 'node:http';",
-    "createServer((req,res) => { res.setHeader('content-type','application/json'); res.end(JSON.stringify(req.url==='/agent'?[{name:'dsh-bridge'}]:{healthy:true,version:'test'})); })",
+    "createServer((req,res) => {",
+    "const expected = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64');",
+    "if (req.headers.authorization !== expected) { res.statusCode = 401; res.end('unauthorized'); return; }",
+    "res.setHeader('content-type','application/json');",
+    "res.end(JSON.stringify(req.url==='/agent'?[{name:'dsh-bridge'}]:{healthy:true,version:'test'})); })",
     "  .listen(Number(process.argv[2]), '127.0.0.1');",
   ].join('\n'));
   const reservation = await externalServer(healthy);
@@ -94,7 +98,11 @@ test('automatically starts real local child and stops only the owned process', a
     }, { argsImpl: port => [fixture, String(port)], logger: { info() {} } });
     await Promise.all([manager.ready(), manager.ready(), manager.ready()]);
     assert.equal(manager.readyOwned, true);
-    assert.equal((await fetch('http://127.0.0.1:' + port + '/global/health')).ok, true);
+    assert.match(manager.ownedPassword, /^[0-9a-f]{64}$/);
+    assert.equal((await fetch('http://127.0.0.1:' + port + '/global/health')).status, 401);
+    const token = Buffer.from('opencode:' + manager.ownedPassword).toString('base64');
+    assert.equal((await fetch('http://127.0.0.1:' + port + '/global/health',
+      { headers: { authorization: 'Basic ' + token } })).ok, true);
     await manager.dispose();
     let stopped = false;
     for (let i = 0; i < 30; i++) {
