@@ -296,3 +296,36 @@ test('guarded-read service fails closed if OpenCode omits the native-tool hook',
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('transient agent lookup transport failure is retried before guard startup completes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-guard-retry-'));
+  const script = await guardedFixture(root);
+  const reservation = await externalServer(healthy);
+  const port = reservation.port;
+  await reservation.close();
+  let lookups = 0;
+  const manager = new OpenCodeService({
+    guardedReadCompatibility: true,
+    endpoint: 'http://127.0.0.1:' + port,
+    opencodeExecutable: process.execPath,
+    runtimeRoot: root,
+    autoStartTimeoutMs: 10000,
+  }, {
+    argsImpl: n => [script, String(n)],
+    logger: { info() {} },
+    fetchImpl: (url, init) => {
+      if (url.endsWith('/agent') && ++lookups === 1) {
+        throw new Error('temporary agent startup timeout');
+      }
+      return fetch(url, init);
+    },
+  });
+  try {
+    await manager.ready({ requireManaged: true });
+    assert.equal(manager.guardVerified, true);
+    assert.ok(lookups >= 2);
+  } finally {
+    await manager.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});

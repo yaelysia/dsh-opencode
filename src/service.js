@@ -138,7 +138,7 @@ export class OpenCodeService {
     try {
       response = await this.fetchImpl(this.target.origin + '/agent', {
         method: 'GET', headers, redirect: 'error',
-        signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(1500)]),
+        signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(5000)]),
       });
     } catch (error) {
       throw failure('Cannot check OpenCode agent: ' + error.message, 'SERVER_AGENT_CHECK_FAILED');
@@ -234,11 +234,22 @@ export class OpenCodeService {
     child.on('exit', (code, signal) => { terminal = 'exited (' + (code ?? signal ?? 'unknown') + ')'; });
     try {
       const deadline = Date.now() + (this.config.autoStartTimeoutMs || START_TIMEOUT_MS);
+      let lastAgentError;
       do {
         this.controller.signal.throwIfAborted();
         if (await this.health()) {
-          await this.assertAgentPresent();
-          if (await this.verifyGuard()) {
+          try {
+            await this.assertAgentPresent();
+            lastAgentError = undefined;
+          } catch (error) {
+            // OpenCode may finish /global/health before its agent/plugin
+            // registry is ready. Retry transport-only failures within the
+            // startup deadline, never a missing agent or HTTP auth error.
+            if (error.code !== 'SERVER_AGENT_CHECK_FAILED'
+              || !error.message.startsWith('Cannot check OpenCode agent:')) throw error;
+            lastAgentError = error;
+          }
+          if (!lastAgentError && await this.verifyGuard()) {
             this.readyOwned = terminal === null;
             this.logger.info?.('dsh-opencode: local OpenCode server ready at ' + origin);
             return;
@@ -248,6 +259,7 @@ export class OpenCodeService {
         if (Date.now() >= deadline) break;
         await this.sleepImpl(CHECK_INTERVAL_MS, undefined, { signal: this.controller.signal });
       } while (true);
+      if (lastAgentError) throw lastAgentError;
       throw this.guardedRead
         ? failure('OpenCode native-tool guard did not register; refusing model calls',
           'SERVER_GUARD_NOT_READY')
