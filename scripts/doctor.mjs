@@ -49,12 +49,14 @@ export async function diagnose(options = {}, fetchImpl) {
       if (options.streamProbe) {
         const started = Date.now();
         const snapshots = [];
+        let chars = 0;
         for await (const item of client.streamResponse({
           model, messages: [{ role: 'user', content:
             'Write the integers from 1 to 40, separated by commas. No additional text.' }],
         })) {
-          if (item.kind === 'snapshot') {
-            snapshots.push({ milliseconds: Date.now() - started, chars: item.text.length });
+          if (item.kind === 'delta') {
+            chars += item.text.length;
+            snapshots.push({ milliseconds: Date.now() - started, chars });
           } else {
             output = item.response;
           }

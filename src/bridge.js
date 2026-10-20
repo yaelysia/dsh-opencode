@@ -119,13 +119,19 @@ export class OpenCodeServeClient {
     const signal = options?.signal
       ? AbortSignal.any([own.signal, options.signal]) : own.signal;
     const items = [];
+    let queuedText = '';
     let done = false;
     let response;
     let error;
     let notify;
     const wake = () => { const fn = notify; notify = null; fn?.(); };
     const task = this.complete({ ...options, signal }, this.streamingEnabled
-      ? snapshot => { if (!done) { items.push({ kind: 'snapshot', text: snapshot }); wake(); } }
+      ? snapshot => {
+        if (done || !snapshot.startsWith(queuedText)) return;
+        const delta = snapshot.slice(queuedText.length);
+        queuedText = snapshot;
+        if (delta) { items.push({ kind: 'delta', text: delta }); wake(); }
+      }
       : undefined);
     task.then(result => { response = result; done = true; wake(); },
       reason => { error = reason; done = true; wake(); });
@@ -274,10 +280,11 @@ export function createAdapter(config = {}, fetchImpl) {
         let lastSnapshot = '';
         let textStarted = false;
         for await (const item of client.streamResponse({ ...options, model: id })) {
-          if (item.kind === 'snapshot') {
-            const snapshot = item.text;
-            if (!snapshot.startsWith(lastSnapshot)) continue;
-            lastSnapshot = snapshot;
+          if (item.kind === 'delta') {
+            // Queue only unseen bytes instead of a growing copy of the full
+            // response per token (which would use quadratic queue memory).
+            lastSnapshot += item.text;
+            const snapshot = lastSnapshot;
             // A partial tool envelope must never be visible or dispatched.
             const candidate = snapshot.trimStart();
             if (!candidate || TOOL_CALL_PREFIX.startsWith(candidate)

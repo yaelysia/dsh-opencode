@@ -299,3 +299,37 @@ test('explicit streaming diagnostic fails visibly without SSE events or fallback
   assert.equal(report.probe.streaming.observedSnapshots, 0);
   assert.equal(messages, 1, 'the diagnostic must not retry or use a fallback model');
 });
+
+test('explicit streaming diagnostic observes a real SSE delta before HTTP completion', async () => {
+  const encoder = new TextEncoder();
+  let source;
+  const emit = (type, properties = {}) =>
+    source.enqueue(encoder.encode('data: ' + JSON.stringify({ type, properties }) + '\n\n'));
+  const report = await diagnose({ streamProbe: true }, async (url) => {
+    if (url.endsWith('/global/health')) return Response.json({ healthy: true, version: '1.19.3' });
+    if (url.endsWith('/provider')) return Response.json({
+      all: [{ id: 'opencode', models: { [model]: { id: model } } }],
+    });
+    if (url.endsWith('/agent')) return Response.json([{ name: 'dsh-bridge' }]);
+    if (url.endsWith('/session')) return Response.json({ id: 'stream-probe' });
+    if (url.endsWith('/event')) {
+      return new Response(new ReadableStream({
+        start(c) { source = c; emit('server.connected'); },
+      }), { headers: { 'content-type': 'text/event-stream' } });
+    }
+    if (url.endsWith('/message')) {
+      emit('message.updated', { sessionID: 'stream-probe',
+        info: { id: 'probe-ai', role: 'assistant', sessionID: 'stream-probe' } });
+      emit('message.part.delta', { sessionID: 'stream-probe',
+        messageID: 'probe-ai', partID: 'probe-part', field: 'text', delta: '1, 2' });
+      await sleep(25);
+      return Response.json({ info: { modelID: model },
+        parts: [{ type: 'text', text: '1, 2, 3' }] });
+    }
+    throw Error('Unexpected endpoint ' + url);
+  });
+  assert.equal(report.ok, true);
+  assert.ok(report.probe.streaming.observedSnapshots >= 1);
+  assert.equal(report.probe.streaming.lastSnapshotChars, 4);
+  assert.equal(report.probe.text, '1, 2, 3');
+});
