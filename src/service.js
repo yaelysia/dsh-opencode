@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { childEnvironment } from './service-env.js';
-import { BRIDGE_AGENT_ID, managedAgentEnvironment } from './managed-agent.js';
+import { BRIDGE_AGENT_ID, managedAgentEnvironment, requireBridgeAgent } from './managed-agent.js';
 import { failure } from './errors.js';
 
 const START_TIMEOUT_MS = 15_000;
@@ -54,11 +54,11 @@ async function portAvailable(port) {
 export class OpenCodeService {
   constructor(config = {}, deps = {}) {
     this.config = config;
+    this.agent = requireBridgeAgent(config.agent || BRIDGE_AGENT_ID);
     this.logger = deps.logger || console;
     this.env = deps.env || process.env;
     // An unguessable local server password belongs to this plugin instance only.
-    this.ownedPassword = this.env[config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'] ||
-      randomBytes(32).toString('hex');
+    this.ownedPassword = randomBytes(32).toString('hex');
     this.platform = deps.platform || process.platform;
     this.fetchImpl = deps.fetchImpl || fetch;
     this.spawnImpl = deps.spawnImpl || spawn;
@@ -105,7 +105,7 @@ export class OpenCodeService {
 
   /** Fail visibly if an existing OpenCode service lacks the DSH-specific agent. */
   async assertAgentPresent() {
-    const agent = this.config.agent || BRIDGE_AGENT_ID;
+    const agent = this.agent;
     if (!this.target) return;
     const headers = {};
     const password = this.passwordForClient();
@@ -177,7 +177,7 @@ export class OpenCodeService {
     }
     const childEnv = managedAgentEnvironment(
       childEnvironment(this.env, root, this.config.autoStartDirect !== false),
-      this.config.agent || BRIDGE_AGENT_ID,
+      this.agent,
       root,
     );
     childEnv[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'] = this.ownedPassword;

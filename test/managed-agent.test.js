@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   BRIDGE_AGENT_ID,
   BRIDGE_PROMPT,
+  requireBridgeAgent,
   managedAgentDefinition,
   managedAgentEnvironment,
 } from '../src/managed-agent.js';
@@ -41,11 +42,14 @@ test('isolates all OpenCode plugins and other agents from the DSH subprocess', (
   assert.equal(child.HTTP_PROXY, parent.HTTP_PROXY);
 });
 
-test('does not mutate global config when using an explicit non-bridge agent', () => {
+test('rejects non-bridge agents before inheriting any OpenCode configuration', () => {
   const parent = { OPENCODE_CONFIG_CONTENT: '{invalid', CUSTOM: 'a' };
-  const child = managedAgentEnvironment(parent, 'plan');
-  assert.deepEqual(child, parent);
-  assert.notEqual(child, parent);
+  assert.throws(() => managedAgentEnvironment(parent, 'plan'),
+    error => error.code === 'BRIDGE_AGENT_REQUIRED');
+  assert.throws(() => requireBridgeAgent('build'),
+    error => error.code === 'BRIDGE_AGENT_REQUIRED');
+  assert.equal(requireBridgeAgent(), BRIDGE_AGENT_ID);
+  assert.deepEqual(parent, { OPENCODE_CONFIG_CONTENT: '{invalid', CUSTOM: 'a' });
 });
 
 test('injects into an empty environment', () => {

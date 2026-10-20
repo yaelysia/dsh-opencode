@@ -122,3 +122,12 @@ test('normal calls wait for automatic startup; local title calls do not launch a
   assert.equal(titleChunks.at(-2).block?.text, 'Title');
   assert.equal(readyCalls, 1, 'local titles never start or probe OpenCode');
 });
+
+test('model adapter cannot target agents with OpenCode native tool authority', () => {
+  for (const agent of ['plan', 'build', 'custom-agent']) {
+    assert.throws(() => new OpenCodeServeClient({ agent }),
+      error => error.code === 'BRIDGE_AGENT_REQUIRED');
+    assert.throws(() => createAdapter({ agent }),
+      error => error.code === 'BRIDGE_AGENT_REQUIRED');
+  }
+});

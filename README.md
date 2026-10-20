@@ -2,7 +2,7 @@
 
 通过本地 [OpenCode 官方服务](https://opencode.ai/docs/server/) 接入 DSH 原生模型选择器。
 
-**0.2.0-alpha.1 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。尚未完成 DSH 工具调用双向映射或真正的逐 token 输出。
+**0.2.0-alpha.1 是实验版。** 文本桥接、错误传递与低流量诊断已经实现；不代表 OpenCode 云端免费模型一定接受当前网络的请求。DSH 工具调用已通过实验性单次文本协议进行双向转换，但尚未完成真实 Desktop 工具授权闭环验证，也没有真正的逐 token 输出。
 
 ## 0.2.0-alpha.1：DSH 工具权限边界（实验性）
 
@@ -12,6 +12,7 @@
 
 - 只在插件自己启动的 OpenCode 子进程中启用 `dsh-bridge`，将**所有 agent 的 OpenCode 原生工具权限统一设置为 `* = deny`**。隔离子进程的 OpenCode 配置目录，禁止继承项目配置、普通 OpenCode 插件和 MCP；只保留既有数据/鉴权目录。不会改用户全局设置。
 - 为本地 OpenCode 服务生成仅存在于插件进程内的随机 Basic Auth 密码，未经认证的 `127.0.0.1:4096` 请求会返回 401。出于安全考虑，新的 Desktop 自动服务不能再用无认证的 `Invoke-RestMethod .../global/health` 直接测试。
+- `agent` 固定为 `dsh-bridge`：托管服务和模型适配器均拒绝内置 `plan`/`build` 或任意自定义 Agent（`BRIDGE_AGENT_REQUIRED`），防止通过配置绕开原生工具权限隔离。托管服务每次生成新的随机 Basic Auth 密码，不使用父进程既有的密码。
 - `strictOwnedServer` 默认开启：**不允许模型请求复用未经插件管理的既有 OpenCode 进程**，避免那个进程带有不受控的权限或插件。要切换新版本，先停止旧的 `opencode serve`，再重启 DSH Desktop。
 - 对 DSH 传入的每个工具名称做精确白名单检查。模型的格式错误、未声明工具、截断工具请求，以及 OpenCode 服务返回的任何原生工具事件都被标记为失败，不会提交为一个“成功调用”。
 
@@ -48,7 +49,7 @@
 
 升级前先完全退出 DSH Desktop，确认 4096 端口没有旧版本 OpenCode 服务占用，然后启动更新后的 DSH。如果使用旧 PowerShell 手工运行的 `opencode serve` 或之前插件留下的服务，那个进程没有 `dsh-bridge` agent：新版会返回 `SERVER_AGENT_MISSING`，不会偷偷使用 `plan`。停止旧服务并让新版插件接管即可。
 
-仅在需要明确保留旧 OpenCode 模式时，手工把插件 `agent` 字段改成 `plan` 或其他已存在的 agent；默认不再使用旧模式。
+自 0.2.0-alpha.1 起，工具隔离模式不允许切换到内置 `plan`、`build` 或其他 Agent。修改 `agent` 字段会显式报 `BRIDGE_AGENT_REQUIRED`。
 
 ## 0.1.4：打开 DSH 后自动运行 OpenCode
 

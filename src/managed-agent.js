@@ -1,6 +1,16 @@
 import path from 'node:path';
+import { failure } from './errors.js';
 
 export const BRIDGE_AGENT_ID = 'dsh-bridge';
+
+/** A managed model transport cannot dispatch an agent with uncontrolled tools. */
+export function requireBridgeAgent(agentId = BRIDGE_AGENT_ID) {
+  if (agentId !== BRIDGE_AGENT_ID) {
+    throw failure('Only the isolated dsh-bridge agent is supported; OpenCode native agents ' +
+      'must not run inside the DSH model transport.', 'BRIDGE_AGENT_REQUIRED');
+  }
+  return agentId;
+}
 export const BRIDGE_PROMPT = [
   'Follow the supplied system instructions and user messages.',
   'You are acting as a text-only model transport for DeepSeek Harness.',
@@ -22,7 +32,7 @@ export function managedAgentDefinition() {
  * model transport. Auth/data remain in the existing XDG_DATA_HOME.
  */
 export function managedAgentEnvironment(env, agentId = BRIDGE_AGENT_ID, root) {
-  if (agentId !== BRIDGE_AGENT_ID) return { ...env };
+  requireBridgeAgent(agentId);
   if (env.OPENCODE_CONFIG_CONTENT) {
     let existing;
     try { existing = JSON.parse(env.OPENCODE_CONFIG_CONTENT); }

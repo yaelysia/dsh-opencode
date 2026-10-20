@@ -193,3 +193,23 @@ test('owned OpenCode service is accepted for DSH tool-authorized requests', asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('managed service rejects native agents before launch', () => {
+  for (const agent of ['plan', 'build', 'custom-agent']) {
+    assert.throws(() => new OpenCodeService({ agent, autoStart: false }),
+      error => error.code === 'BRIDGE_AGENT_REQUIRED');
+  }
+});
+
+test('owned Basic Auth credentials never reuse inherited host credentials', () => {
+  const manager = new OpenCodeService({ autoStart: false }, {
+    env: { OPENCODE_SERVER_PASSWORD: 'host-secret' },
+  });
+  try {
+    assert.match(manager.ownedPassword, /^[0-9a-f]{64}$/);
+    assert.notEqual(manager.ownedPassword, 'host-secret');
+    assert.equal(manager.passwordForClient(), 'host-secret');
+  } finally {
+    void manager.dispose();
+  }
+});

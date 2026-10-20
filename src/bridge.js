@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { failure, providerFailure } from './errors.js';
 import { localSessionTitle } from './title.js';
-import { BRIDGE_AGENT_ID } from './managed-agent.js';
+import { BRIDGE_AGENT_ID, requireBridgeAgent } from './managed-agent.js';
 import {
   toolInstructions, parseToolRequest, assertNoOpenCodeToolParts, renderConversationMessage,
 } from './tool-boundary.js';
@@ -44,7 +44,7 @@ export class OpenCodeServeClient {
       || origin.search || origin.hash) throw new TypeError('endpoint must be an http(s) URL without credentials, query or fragment');
     this.origin = origin.toString().replace(/\/+$/, '');
     this.backendProviderId = config.backendProviderId || 'opencode';
-    this.agent = config.agent || BRIDGE_AGENT_ID;
+    this.agent = requireBridgeAgent(config.agent || BRIDGE_AGENT_ID);
     this.passwordEnv = config.passwordEnv || 'OPENCODE_SERVER_PASSWORD';
     this.passwordProvider = config.passwordProvider;
     this.username = config.username || process.env.OPENCODE_SERVER_USERNAME || 'opencode';
