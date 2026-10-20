@@ -129,7 +129,15 @@ test('official OpenCode 1.19.3 completes a guarded native tool through a mocked 
       Buffer.from('opencode:' + password).toString('base64'),
       'content-type': 'application/json' };
     await waitUntilHealthy(origin, headers, child);
-    assert.equal(await readFile(marker, 'utf8'), nonce);
+    // OpenCode /global/health becomes healthy before its plugin/agent
+    // registry is initialized. Wait for the actual guard callback proof.
+    let guardReady = false;
+    for (let i = 0; i < 105 && !guardReady; i++) {
+      guardReady = await readFile(marker, 'utf8').then(text => text === nonce)
+        .catch(() => false);
+      if (!guardReady) await new Promise(resolve => setTimeout(resolve, 400));
+    }
+    assert.equal(guardReady, true, 'native tool guard must register before test calls');
     const sessionResponse = await fetch(origin + '/session', {
       method: 'POST', headers, body: JSON.stringify({ title: 'native tool CI' }),
       signal: AbortSignal.timeout(10000),
