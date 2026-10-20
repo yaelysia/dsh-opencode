@@ -493,7 +493,7 @@ test('history contains a provider-executed tool: never forward the guarded SSE i
   const history = guardedHistory(upstream, [completed]);
   const job = assert.rejects(async () => consume(await start(createAdapter({
     guardedReadCompatibility: true, ssePreviewEnabled: true,
-  }, history.fetch)), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  }, history.fetch))), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
   await upstream.posted;
   upstream.finish();
   await job;
@@ -516,7 +516,7 @@ test('mismatched or missing authoritative native tool identity fails closed', as
   }]);
   const job = assert.rejects(async () => consume(await start(createAdapter({
     guardedReadCompatibility: true, ssePreviewEnabled: true,
-  }, history.fetch)), error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  }, history.fetch))), error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
   await upstream.posted;
   upstream.finish();
   await job;
