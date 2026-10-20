@@ -32,7 +32,7 @@ export async function main(args = process.argv.slice(2)) {
   const root = path.resolve(values.root || path.join(local || process.cwd(), 'OpenCodeRuntime'));
   await access(exe);
   await ensurePortFree(port);
-  const env = managedAgentEnvironment(childEnvironment(process.env, root, values.direct), BRIDGE_AGENT_ID);
+  const env = managedAgentEnvironment(childEnvironment(process.env, root, values.direct), BRIDGE_AGENT_ID, root);
   for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
     await mkdir(env[key], { recursive: true });
   }
