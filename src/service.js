@@ -108,7 +108,7 @@ export class OpenCodeService {
     const agent = this.config.agent || BRIDGE_AGENT_ID;
     if (!this.target) return;
     const headers = {};
-    const password = this.env[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'];
+    const password = this.passwordForClient();
     if (password) {
       const username = this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode';
       headers.authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
