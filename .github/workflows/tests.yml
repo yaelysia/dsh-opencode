@@ -53,3 +53,20 @@ jobs:
           chmod +x "$executable"
           echo "OPENCODE_TEST_EXE=$executable" >> "$GITHUB_ENV"
       - run: node --test integration/opencode-native-guard-smoke.mjs
+
+  opencode-1-19-3-windows-guard-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Download official OpenCode 1.19.3 Windows CLI (no model requests)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-windows-x64.zip" -OutFile opencode-windows.zip
+          Expand-Archive -Path opencode-windows.zip -DestinationPath opencode-win -Force
+          $exe = Get-ChildItem -Path opencode-win -Filter opencode.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "OpenCode executable missing from official zip" }
+          "OPENCODE_TEST_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - run: node --test integration/opencode-native-guard-smoke.mjs
