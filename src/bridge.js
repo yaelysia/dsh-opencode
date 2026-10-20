@@ -6,6 +6,7 @@ import { BRIDGE_AGENT_ID, requireBridgeAgent } from './managed-agent.js';
 import { openSessionEvents, SessionEventAccumulator } from './opencode-events.js';
 import {
   TOOL_CALL_PREFIX, toolInstructions, parseToolRequest, inspectNativeToolParts,
+  nativePartsForTurn,
   translateGuardedTool, nativeToolPart, renderConversationMessage,
 } from './tool-boundary.js';
 
@@ -268,6 +269,39 @@ export class OpenCodeServeClient {
       // produces the terminal 'error'. The synchronous /message response may
       // contain only the final assistant step and omit earlier tool parts.
       // Never interpret intermediate SSE states as final tool execution.
+      // On real OpenCode replies, always inspect the current prompt's
+      // authoritative history when the DSH tool bridge is active. SSE may
+      // drop tool events, and /message can contain only the last assistant
+      // step; neither stream is a complete tool ledger by itself.
+      const useCurrentHistory = this.guardedReadCompatibility && tools.length > 0
+        && typeof response.info?.id === 'string' && Boolean(response.info.id);
+      if (useCurrentHistory) {
+        let complete = false;
+        for (let attempt = 0; attempt < 3 && !complete; attempt++) {
+          const history = await this.request(
+            '/session/' + encodeURIComponent(session.id) + '/message?limit=80',
+            undefined, options?.signal, 'GET');
+          const authoritative = nativePartsForTurn(history, response.info.id);
+          const byId = new Map(authoritative.map(part => [part.id, part]));
+          // If an SSE/final tool event vanished from history, never proceed
+          // as if no tool was requested.
+          const expected = [...observed, ...finalParts];
+          const missing = expected.some(part => !part.id || !byId.has(part.id)
+            || part.messageID !== byId.get(part.id).messageID);
+          complete = !missing && authoritative.every(part =>
+            ['error', 'completed'].includes(part.state?.status));
+          if (complete) {
+            native.clear();
+            for (const part of authoritative) native.set(part.id, part);
+          } else if (attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 120));
+          }
+        }
+        if (!complete) {
+          throw failure('Current OpenCode tool history is incomplete or unsettled',
+            'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+        }
+      } else {
       const finalIds = new Set(finalParts.map(part => part.id).filter(Boolean));
       const needsHistory = observed.some(part => !finalIds.has(part.id))
         || [...native.values()].some(part => ['pending', 'running'].includes(part.state?.status));
@@ -316,6 +350,7 @@ export class OpenCodeServeClient {
           throw failure('OpenCode native tool never reached a verifiable terminal state',
             'NATIVE_TOOL_HISTORY_UNAVAILABLE');
         }
+      }
       }
       const nativeParts = [...native.values()];
       const verifiedDenials = this.verifyNativeDenials

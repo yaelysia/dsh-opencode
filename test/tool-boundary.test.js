@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createAdapter, OpenCodeServeClient } from '../src/bridge.js';
 import {
   TOOL_CALL_PREFIX, toolInstructions, parseToolRequest, assertNoOpenCodeToolParts,
-  inspectNativeToolParts, translateGuardedTool, NATIVE_GUARD_DENIAL, renderConversationMessage,
+  inspectNativeToolParts, nativePartsForTurn, translateGuardedTool, NATIVE_GUARD_DENIAL, renderConversationMessage,
 } from '../src/tool-boundary.js';
 
 const model = 'deepseek-v4.1-flash-free';
@@ -375,4 +375,80 @@ test('authenticated pre-execution guard proof accepts an error part without vend
     state: { ...part.state, status: 'completed' },
   }], { guarded: true, verifiedDenials }),
   error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+});
+
+test('authoritative native history includes only tools from the current OpenCode turn', () => {
+  const old = { type: 'tool', id: 'p-old', messageID: 'a-old',
+    state: { status: 'error' } };
+  const current = { type: 'tool', id: 'p-new', messageID: 'a-mid',
+    state: { status: 'error' } };
+  const history = [
+    { info: { id: 'u-old', role: 'user' }, parts: [] },
+    { info: { id: 'a-old', role: 'assistant' }, parts: [old] },
+    { info: { id: 'u-new', role: 'user' }, parts: [] },
+    { info: { id: 'a-mid', role: 'assistant' }, parts: [current] },
+    { info: { id: 'a-final', role: 'assistant' }, parts: [
+      { type: 'text', text: 'final' },
+    ] },
+  ];
+  assert.deepEqual(nativePartsForTurn(history, 'a-final'), [current]);
+  assert.throws(() => nativePartsForTurn(history, 'missing'),
+    error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  assert.throws(() => nativePartsForTurn(history.slice(1), 'a-old'),
+    error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  const invalid = structuredClone(history);
+  invalid[3].parts[0].messageID = 'a-old';
+  assert.throws(() => nativePartsForTurn(invalid, 'a-final'),
+    error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+});
+
+test('DSH can discover a guarded native tool from the current prompt history even when SSE is disabled', async () => {
+  const guarded = intercepted('read', { filePath: 'text.txt' });
+  guarded.id = 'current-native';
+  guarded.messageID = 'assistant-mid';
+  guarded.sessionID = 'srv-1';
+  const history = [
+    { info: { role: 'user', id: 'user-1' }, parts: [{ type: 'text', text: 'read' }] },
+    { info: { role: 'assistant', id: 'assistant-mid' }, parts: [guarded] },
+    { info: { role: 'assistant', id: 'assistant-final1' },
+      parts: [{ type: 'text', text: 'Checking.' }] },
+  ];
+  let prompts = 0, histories = 0;
+  const fetchMock = async (url, init) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'srv-1' });
+    if (init.method === 'GET' && url.includes('/message')) {
+      histories++;
+      return Response.json(prompts === 1 ? history : [
+        ...history,
+        { info: { role: 'user', id: 'user-2' }, parts: [] },
+        { info: { role: 'assistant', id: 'assistant-final2' },
+          parts: [{ type: 'text', text: 'Done' }] },
+      ]);
+    }
+    prompts++;
+    return Response.json(prompts === 1 ? {
+      info: { id: 'assistant-final1', modelID: model },
+      parts: [{ type: 'text', text: 'Checking.' }],
+    } : {
+      info: { id: 'assistant-final2', modelID: model },
+      parts: [{ type: 'text', text: 'Done' }],
+    });
+  };
+  const client = new OpenCodeServeClient({
+    guardedReadCompatibility: true, ssePreviewEnabled: false,
+  }, fetchMock);
+  const first = await client.complete({ sessionId: 'dsh-session', model,
+    messages: [user], tools: hostTools });
+  assert.equal(first.dshToolCall.name, 'read');
+  assert.deepEqual(JSON.parse(first.dshToolCall.arguments), { file_path: 'text.txt' });
+  const second = await client.complete({ sessionId: 'dsh-session', model,
+    messages: [user,
+      { role: 'assistant', content: [{ type: 'tool-call', id: first.dshToolCall.id,
+        name: 'read', arguments: first.dshToolCall.arguments }] },
+      { role: 'tool', toolCallId: first.dshToolCall.id, isError: false,
+        content: [{ type: 'text', text: 'ok' }] },
+    ], tools: hostTools });
+  assert.equal(second.dshToolCall, null, 'prior native tool must not replay');
+  assert.equal(histories, 2, 'one read-only history query per tool-enabled prompt');
+  assert.equal(prompts, 2, 'history lookup never triggers additional model calls');
 });

@@ -112,6 +112,45 @@ const NATIVE_TARGETS = Object.freeze({
 export const nativeToolPart = part =>
   part && ['tool', 'tool-call', 'tool-result', 'tool_call', 'tool_result'].includes(part.type);
 
+/** Read native tool parts strictly from the single OpenCode prompt that
+ * produced finalAssistantId. Older session turns are never replayed. */
+export function nativePartsForTurn(history, finalAssistantId) {
+  if (!Array.isArray(history) || typeof finalAssistantId !== 'string'
+    || !finalAssistantId) {
+    throw failure('Cannot identify the OpenCode message history boundary',
+      'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  }
+  const end = history.findIndex(entry =>
+    entry?.info?.role === 'assistant' && entry.info.id === finalAssistantId);
+  if (end < 0) {
+    throw failure('The final OpenCode assistant message is missing from history',
+      'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  }
+  let start = -1;
+  for (let index = end - 1; index >= 0; index--) {
+    if (history[index]?.info?.role === 'user') { start = index; break; }
+  }
+  if (start < 0) {
+    throw failure('The matching OpenCode user message is outside the history window',
+      'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  }
+  const results = [];
+  for (const entry of history.slice(start + 1, end + 1)) {
+    if (entry?.info?.role !== 'assistant' || !Array.isArray(entry.parts)) {
+      throw failure('OpenCode history has an invalid assistant message',
+        'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+    }
+    for (const part of entry.parts.filter(nativeToolPart)) {
+      if (part.messageID !== entry.info.id || typeof part.id !== 'string') {
+        throw failure('OpenCode native tool history identities do not match',
+          'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+      }
+      results.push(part);
+    }
+  }
+  return results;
+}
+
 /** The guard denial is the only native event admitted to a DSH tool boundary.
  * "providerExecuted" or a completed/pending result must never be forgiven. */
 export function inspectNativeToolParts(parts, { guarded = false, verifiedDenials = new Set() } = {}) {

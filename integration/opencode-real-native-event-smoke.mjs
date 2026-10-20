@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { managedAgentEnvironment, BRIDGE_AGENT_ID } from '../src/managed-agent.js';
+import { createAdapter } from '../src/bridge.js';
 
 async function availablePort() {
   const server = createTcpServer();
@@ -62,7 +63,7 @@ function mockProvider() {
         ...(usage ? { usage } : {}),
       }) + '\n\n');
     };
-    if (requests.length === 1) {
+    if (!payload.messages?.some(message => message.role === 'tool')) {
       write({ role: 'assistant', tool_calls: [{
         index: 0, id: 'call-local-1', type: 'function',
         function: { name: 'read', arguments: JSON.stringify({
@@ -192,6 +193,44 @@ test('official OpenCode 1.19.3 completes a guarded native tool through a mocked 
     assert.ok(evidence.includes(nonce), 'the pre-execution native guard must record the tool call');
     assert.ok(native.every(p => p.state?.status !== 'completed'),
       'the real OpenCode native read executor must never run');
+    assert.equal(typeof message.info.id, 'string');
+
+    // The bridge must now discover the native read from the entire *current*
+    // prompt history even though /message only returns the final assistant
+    // step, and without relying on optional SSE delivery.
+    const verifyNativeDenials = async parts => {
+      const records = (await readFile(audit, 'utf8')).split('\n').filter(Boolean)
+        .map(line => JSON.parse(line));
+      return new Set(parts.filter(part => records.some(item =>
+        item.nonce === nonce && item.sessionID === part.sessionID
+        && item.callID === part.callID && item.tool === part.tool))
+        .map(part => part.id));
+    };
+    const adapter = createAdapter({
+      endpoint: origin, backendProviderId: 'dsh-local', models: ['mock'],
+      passwordProvider: () => password, guardedReadCompatibility: true,
+      ssePreviewEnabled: false, verifyNativeDenials,
+    });
+    const prepared = await adapter.prepareCall('opencode-serve', 'mock');
+    const forwarded = [];
+    for await (const chunk of prepared.stream({
+      provider: 'opencode-serve', model: 'mock',
+      tools: [{ name: 'read', description: 'DSH-owned read', parameters: {
+        type: 'object', properties: { file_path: { type: 'string' } },
+        required: ['file_path'],
+      } }],
+      messages: [{ role: 'user', content: [{ type: 'text',
+        text: 'Read a local file using the safe DSH tool.' }] }],
+      sessionId: 'dsh-offline-tool-check',
+    })) forwarded.push(chunk);
+    const call = forwarded.find(item => item.type === 'tool-call-delta');
+    assert.equal(call?.name, 'read', 'only DSH should receive the native tool intent');
+    assert.deepEqual(JSON.parse(call.argumentsDelta),
+      { file_path: '/dsh-not-a-real-file.txt' });
+    assert.equal(forwarded.at(-1)?.reason.kind, 'tool-calls');
+    console.info('OFFICIAL_NATIVE_TO_DSH_DISPATCH ' +
+      JSON.stringify({ providerRequests: mock.requests.length,
+        tool: call.name, finish: forwarded.at(-1)?.reason.kind }));
   } catch (error) {
     console.error('OpenCode mocked native test failed: ' + error.message);
     console.error('OpenCode process output (truncated): ' + output.slice(0, 1500));
