@@ -164,3 +164,25 @@ test('unmanaged service requirements are propagated before a tool request', asyn
   await client.complete({ model, tools, messages: [user] });
   assert.equal(required.requireManaged, true);
 });
+
+
+test('DSH-denied tool call is returned as a tool error, not executed in OpenCode', async () => {
+  const server = mockServer([
+    [{ type: 'text', text: callText }],
+    [{ type: 'text', text: 'The requested tool was denied by DSH.' }],
+  ]);
+  const client = new OpenCodeServeClient({}, server.fetch);
+  const first = await client.complete({ model, tools, sessionId: 'denied',
+    messages: [user] });
+  const call = first.dshToolCall;
+  assert.equal(call.name, 'read_file');
+  const second = await client.complete({ model, tools, sessionId: 'denied',
+    messages: [user, { role: 'assistant', content: [{ type: 'tool-call',
+      id: call.id, name: call.name, arguments: call.arguments }] },
+      { role: 'tool', toolCallId: call.id, isError: true,
+        content: [{ type: 'text', text: 'permission denied' }] }] });
+  assert.equal(second.dshToolCall, null);
+  assert.match(server.calls[2].body.parts[0].text, /error=true/);
+  assert.match(server.calls[2].body.parts[0].text, /permission denied/);
+  assert.equal(server.calls.length, 3, 'no direct OpenCode tool execution requests');
+});
