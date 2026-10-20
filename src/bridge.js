@@ -182,14 +182,18 @@ export class OpenCodeServeClient {
     // Native/DSH tool IDs are separate namespaces. Include the DSH
     // assistant's structured call summary with its result, even in a reused
     // OpenCode session, so a result is never just an unexplained callId.
+    // Preserve DSH message authority. A developer instruction serialized as
+    // user text is demoted beneath OpenCode's own agent prompt and may break
+    // tool policies; both privileged roles belong in the upstream system slot.
+    const privileged = message => ['system', 'developer'].includes(message?.role);
     const toSend = (session
       ? unseen.filter(message => message.role !== 'assistant'
         || message.content?.some?.(part => part?.type === 'tool-call'))
-      : messages).filter(message => message.role !== 'system');
+      : messages).filter(message => !privileged(message));
     const prompt = renderMessages(toSend);
     if (!prompt.trim()) throw failure('No text message to send to OpenCode', 'INVALID_REQUEST');
     const system = [options?.system,
-      ...messages.filter(m => m.role === 'system').map(m => textOf(m.content)),
+      ...messages.filter(privileged).map(m => textOf(m.content)),
       toolGuide,
     ].filter(Boolean).join('\n\n');
     const payload = {

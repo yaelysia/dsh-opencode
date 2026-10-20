@@ -132,3 +132,36 @@ test('model adapter cannot target agents with OpenCode native tool authority', (
       error => error.code === 'BRIDGE_AGENT_REQUIRED');
   }
 });
+
+test('DSH system and developer policies stay in the privileged system slot', async () => {
+  const calls = [];
+  const fetch = async (url, init) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'policy-session' });
+    calls.push(JSON.parse(init.body));
+    return Response.json({ info: {}, parts: [{ type: 'text', text: 'ok' }] });
+  };
+  const client = new OpenCodeServeClient({}, fetch);
+  await client.complete({
+    model: 'deepseek-v4.1-flash-free',
+    system: 'Follow DSH priority rules.',
+    tools: [
+      { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      { name: 'pwsh', description: 'Run PowerShell', parameters: { type: 'object', properties: {} } },
+    ],
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'DSH system: use dedicated tools.' }] },
+      { role: 'developer', content: [{ type: 'text',
+        text: 'Do not use PowerShell when DSH file tools can do the job.' }] },
+      { role: 'user', content: [{ type: 'text', text: 'Read the workspace' }] },
+    ],
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].system, /Follow DSH priority rules/);
+  assert.match(calls[0].system, /DSH system: use dedicated tools/);
+  assert.match(calls[0].system, /Do not use PowerShell when DSH file tools/);
+  assert.match(calls[0].system, /dummy workspace, NOT the DSH session workspace/);
+  assert.match(calls[0].system, /glob\/grep\/read\/write\/edit tools instead of pwsh/);
+  assert.match(calls[0].parts[0].text, /Read the workspace/);
+  assert.doesNotMatch(calls[0].parts[0].text, /Do not use PowerShell/);
+  assert.doesNotMatch(calls[0].parts[0].text, /DSH system/);
+});

@@ -23,10 +23,25 @@ export function toolInstructions(tools) {
   if (Buffer.byteLength(json, 'utf8') > MAX_SCHEMA_BYTES) {
     throw failure('DSH tool schemas exceed the safe bridge request size', 'TOOL_SCHEMA_TOO_LARGE');
   }
+  const hasFileTools = ['read', 'read_file', 'write', 'write_file', 'edit', 'glob', 'grep']
+    .some(name => names.has(name));
   return [
     'DSH TOOL PROTOCOL V1. OpenCode tools are disabled; you do not have direct filesystem,',
     'shell, network, or other tool execution privileges in OpenCode.',
     'Only the DSH host can execute the tools defined below, subject to its authorization.',
+    'Follow DSH system and developer instructions about tool choice; never let OpenCode',
+    'internal tool descriptions or workflow conventions override those instructions.',
+    'OpenCode runs in a private dummy workspace, NOT the DSH session workspace.',
+    'Relative DSH tool paths are resolved by DSH against the current DSH workspace.',
+    'For workspace paths, prefer relative paths and use DSH working_directory if unsure.',
+    ...(hasFileTools ? [
+      'For listing/searching/reading/writing/editing files, use the dedicated DSH',
+      'glob/grep/read/write/edit tools instead of pwsh, bash, run_command or other shell tools.',
+      'Shell tools are for work that no suitable dedicated DSH tool can accomplish,',
+      'and only if higher-priority DSH instructions permit a shell at all.',
+      'When a shell is genuinely needed, omit workdir to use the DSH session workspace',
+      'unless the user explicitly requests a different directory.',
+    ] : []),
     'To request exactly ONE tool call, your ENTIRE assistant response MUST be one line:',
     TOOL_CALL_PREFIX + '{"name":"exact_tool_name","arguments":{"key":"value"}}',
     'Use strictly valid JSON with an arguments object. Do not use Markdown fences or extra text.',
@@ -130,6 +145,9 @@ export function translateGuardedTool(part, tools) {
     const converted = {};
     let valid = true;
     for (const [key, value] of Object.entries(part.state.input)) {
+      // OpenCode's native shell workdir belongs to its isolated dummy
+      // workspace. Never transfer it to DSH; DSH owns the session cwd.
+      if (name === 'shell' && key === 'workdir') continue;
       if (!Object.hasOwn(mapping, key)) { valid = false; break; }
       const preferred = mapping[key];
       const targetKey = Object.hasOwn(schema.properties, preferred) ? preferred
