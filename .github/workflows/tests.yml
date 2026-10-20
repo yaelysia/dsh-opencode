@@ -33,3 +33,23 @@ jobs:
       # Exercise the actual published DSH adapter imports, not only our mock fetch.
       - run: npm install --no-save --ignore-scripts --no-audit --no-fund @deepseek-ai/cordis@4.0.5 @deepseek-ai/schemastery@3.18.5 @deepseek-ai/dsh-llm@0.2.1-rc.2
       - run: node --test integration/entrypoint-smoke.mjs
+
+  opencode-1-19-3-guard-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Download official OpenCode 1.19.3 CLI (no model requests)
+        run: |
+          curl --fail --location --retry 2 --retry-delay 2 \
+            https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-linux-x64.tar.gz \
+            --output opencode-cli.tar.gz
+          mkdir -p opencode-cli
+          tar -xzf opencode-cli.tar.gz -C opencode-cli
+          executable="$(find "$PWD/opencode-cli" -type f -name opencode -print -quit)"
+          test -n "$executable"
+          chmod +x "$executable"
+          echo "OPENCODE_TEST_EXE=$executable" >> "$GITHUB_ENV"
+      - run: node --test integration/opencode-native-guard-smoke.mjs
