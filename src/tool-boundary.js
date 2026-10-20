@@ -120,13 +120,23 @@ export function inspectNativeToolParts(parts, { guarded = false, verifiedDenials
   for (const part of native) {
     if (!guarded || part.type !== 'tool'
       || part.state?.status !== 'error'
-      || typeof part.state.error !== 'string'
-      || (!part.state.error.includes(NATIVE_GUARD_DENIAL)
+      || (!(typeof part.state.error === 'string'
+        && part.state.error.includes(NATIVE_GUARD_DENIAL))
         && !verifiedDenials.has(part.id))
       || part.metadata?.providerExecuted === true
       || part.state.metadata?.providerExecuted === true) {
-      throw failure('OpenCode emitted a native tool event without a verified pre-execution denial',
-        'OPENCODE_TOOL_BOUNDARY');
+      const tool = /^[a-z_]{1,40}$/i.test(part.tool ?? '') ? part.tool : 'unknown';
+      const status = ['pending', 'running', 'error', 'completed'].includes(part.state?.status)
+        ? part.state.status : 'unknown';
+      const guardDenial = typeof part.state?.error === 'string'
+        && part.state.error.includes(NATIVE_GUARD_DENIAL);
+      const executed = part.metadata?.providerExecuted === true
+        || part.state?.metadata?.providerExecuted === true;
+      // Never include native arguments, error text, filenames or command text.
+      throw failure('OpenCode native tool not verified as blocked '
+        + '(tool=' + tool + ', status=' + status + ', guardDenial=' + guardDenial
+        + ', auditVerified=' + verifiedDenials.has(part.id)
+        + ', providerExecuted=' + executed + ')', 'OPENCODE_TOOL_BOUNDARY');
     }
   }
   return native;

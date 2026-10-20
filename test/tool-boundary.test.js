@@ -346,3 +346,33 @@ test('an authenticated hook audit may prove a native denial even if OpenCode rew
   }], { guarded: true, verifiedDenials: new Set([part.id]) }),
   error => error.code === 'OPENCODE_TOOL_BOUNDARY');
 });
+
+test('unknown native-tool denial exposes safe classifications but no private arguments', () => {
+  const part = { id: 'part-x', type: 'tool', tool: 'edit',
+    state: { status: 'error',
+      input: { filePath: 'secret-file-123', oldString: 'old', newString: 'private-content-456' },
+      error: 'Provider rejected modification of secret-file-123' } };
+  assert.throws(() => inspectNativeToolParts([part], { guarded: true }),
+    error => error.code === 'OPENCODE_TOOL_BOUNDARY'
+      && /tool=edit, status=error, guardDenial=false, auditVerified=false/.test(error.message)
+      && !/secret-file-123|private-content-456/.test(error.message));
+});
+
+test('authenticated pre-execution guard proof accepts an error part without vendor error text', () => {
+  const part = { id: 'part-guard-1', type: 'tool', tool: 'edit',
+    sessionID: 'session-1', callID: 'native-1',
+    state: { status: 'error', input: {
+      filePath: 'notes.txt', oldString: 'a', newString: 'b',
+    } } };
+  const verifiedDenials = new Set(['part-guard-1']);
+  assert.equal(inspectNativeToolParts([part], {
+    guarded: true, verifiedDenials,
+  }).length, 1);
+  assert.throws(() => inspectNativeToolParts([part], {
+    guarded: true, verifiedDenials: new Set(),
+  }), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  assert.throws(() => inspectNativeToolParts([{ ...part,
+    state: { ...part.state, status: 'completed' },
+  }], { guarded: true, verifiedDenials }),
+  error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+});

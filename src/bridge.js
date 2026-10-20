@@ -35,6 +35,20 @@ function* textChunks(text) {
   yield { type: 'block-end', index: 0, block: { type: 'text', text } };
 }
 
+/** Use the real human turn, not later English DSH runtime snapshots. */
+export function userLanguageDirective(messages) {
+  if (!Array.isArray(messages)) return '';
+  const users = [...messages].reverse().filter(message => message?.role === 'user');
+  const human = users.find(message => message.source?.kind === 'user')
+    ?? users.find(message => message.source === undefined);
+  if (!human || !/[\u3400-\u9fff]/u.test(textOf(human.content))) return '';
+  return 'For this Chinese-language user request, use Simplified Chinese for '
+    + 'all user-visible output, including progress narration before and between '
+    + 'tool calls and the final reply. Keep code, literal filenames and tool IDs '
+    + 'unchanged. A user explicitly requesting another output language overrides '
+    + 'the default language preference.';
+}
+
 function fingerprint(messages) {
   return createHash('sha256').update(JSON.stringify(messages)).digest('hex');
 }
@@ -205,6 +219,7 @@ export class OpenCodeServeClient {
       ...messages.filter(workspaceInstruction).map(m =>
         'DSH user workspace instructions (lower priority than system/developer; '
         + 'follow when applicable):\n' + textOf(m.content)),
+      userLanguageDirective(messages),
     ].filter(Boolean).join('\n\n');
     const payload = {
       model: { providerID: this.backendProviderId, modelID: options.model },

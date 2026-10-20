@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { OpenCodeServeClient, createAdapter } from '../src/bridge.js';
+import { OpenCodeServeClient, createAdapter, userLanguageDirective } from '../src/bridge.js';
 
 test('translates official OpenCode session response into DSH stream', async () => {
   const calls = [];
@@ -186,4 +186,35 @@ test('DSH AGENTS.md language rule is explicitly preserved below system/developer
   assert.match(payloads[0].system, /DSH user workspace instructions/);
   assert.match(payloads[0].system, /每次都要用中文回复/);
   assert.match(payloads[0].system, /lower priority than system\/developer/);
+});
+
+test('real Chinese user instruction outranks later English runtime snapshots for response language', async () => {
+  const sent = [];
+  const fetch = async (url, req) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'locale-harness' });
+    sent.push(JSON.parse(req.body));
+    return Response.json({ info: {}, parts: [{ type: 'text', text: '已完成' }] });
+  };
+  const messages = [
+    { role: 'system', content: [{ type: 'text', text: 'You are a coding agent.' }] },
+    { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '请读取一个文件。' }] },
+    { role: 'user', source: { kind: 'agent-instructions', form: 'instructions' },
+      content: [{ type: 'text', text: '<system-reminder>每次都用中文回复。</system-reminder>' }] },
+    { role: 'user', source: { kind: 'runtime-context' },
+      content: [{ type: 'text', text: 'Current working directory is C:\\workspace.' }] },
+  ];
+  assert.match(userLanguageDirective(messages), /Simplified Chinese/);
+  const client = new OpenCodeServeClient({}, fetch);
+  await client.complete({ model: 'deepseek-v4.1-flash-free', messages });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].system, /Simplified Chinese/);
+  assert.match(sent[0].system, /progress narration before and between/);
+  assert.match(sent[0].system, /每次都用中文回复/);
+  assert.doesNotMatch(sent[0].parts[0].text, /progress narration before and between/);
+});
+
+test('non-Chinese user requests do not inherit a Chinese language default', () => {
+  assert.equal(userLanguageDirective([
+    { role: 'user', source: { kind: 'user' }, content: 'Please reply in English.' },
+  ]), '');
 });
