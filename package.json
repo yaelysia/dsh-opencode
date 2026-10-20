@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode",
-  "version": "0.1.5",
+  "version": "0.2.0-alpha.1",
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -32,5 +32,6 @@
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
     "@deepseek-ai/schemastery": "^3.18.4"
-  }
+  },
+  "description": "OpenCode free-model bridge for DSH with isolated tool authority"
 }
