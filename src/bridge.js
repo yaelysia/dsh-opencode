@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto';
 import { failure, providerFailure } from './errors.js';
 import { localSessionTitle } from './title.js';
 import { BRIDGE_AGENT_ID } from './managed-agent.js';
+import {
+  toolInstructions, parseToolRequest, assertNoOpenCodeToolParts, renderConversationMessage,
+} from './tool-boundary.js';
 
 export const DEFAULT_MODELS = Object.freeze([
   'deepseek-v4.1-flash-free',
@@ -19,10 +22,8 @@ function textOf(content) {
 
 export function renderMessages(messages) {
   if (!Array.isArray(messages)) return '';
-  const rows = messages.map(message => {
-    const text = textOf(message?.content);
-    return text ? (message.role || 'user') + ':\n' + text : '';
-  }).filter(Boolean);
+  const rows = messages.map(message => renderConversationMessage(message, textOf))
+    .filter(Boolean);
   return rows.length === 1 && rows[0].startsWith('user:\n') ? rows[0].slice(6) : rows.join('\n\n');
 }
 
@@ -52,6 +53,7 @@ export class OpenCodeServeClient {
     this.attributionHeaders = config.attributionHeaders ?? {};
     this.logger = config.logger;
     this.ensureService = config.ensureService;
+    this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
     this.sessions = new Map();
     this.pending = Promise.resolve();
     this.blocked = null;
@@ -110,8 +112,13 @@ export class OpenCodeServeClient {
   async completeOnce(options) {
     if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
     if (this.blocked && Date.now() < this.blocked.until) throw this.blocked.error;
-    // Startup is on demand too: a user can send immediately after plugin activation.
-    await this.ensureService?.();
+    const tools = Array.isArray(options?.tools) ? options.tools : [];
+    if (tools.length && !this.toolBridgeEnabled) {
+      throw failure('DSH tools were provided but the model bridge is disabled', 'DSH_TOOLS_DISABLED');
+    }
+    const toolGuide = toolInstructions(tools);
+    // Require the isolated, plugin-owned OpenCode process for tool-bearing requests.
+    await this.ensureService?.({ requireManaged: tools.length > 0 });
     if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
     const messages = Array.isArray(options?.messages) ? options.messages : [];
     const key = options?.sessionId ? JSON.stringify([
@@ -125,8 +132,10 @@ export class OpenCodeServeClient {
       .filter(message => message.role !== 'system');
     const prompt = renderMessages(toSend);
     if (!prompt.trim()) throw failure('No text message to send to OpenCode', 'INVALID_REQUEST');
-    const system = [options?.system, ...messages.filter(m => m.role === 'system').map(m => textOf(m.content))]
-      .filter(Boolean).join('\n\n');
+    const system = [options?.system,
+      ...messages.filter(m => m.role === 'system').map(m => textOf(m.content)),
+      toolGuide,
+    ].filter(Boolean).join('\n\n');
     const payload = {
       model: { providerID: this.backendProviderId, modelID: options.model },
       agent: this.agent, ...(system ? { system } : {}),
@@ -137,19 +146,21 @@ export class OpenCodeServeClient {
       const response = await this.request('/session/' + encodeURIComponent(session.id) + '/message', payload, options?.signal);
       if (response?.info?.error) throw providerFailure(response.info.error);
       if (!Array.isArray(response?.parts)) throw failure('OpenCode returned no message parts', 'INVALID_RESPONSE');
+      assertNoOpenCodeToolParts(response.parts);
       if (response.info?.modelID && response.info.modelID !== options.model) throw failure('OpenCode returned a different model', 'MODEL_MISMATCH');
       const text = response.parts.filter(p => p?.type === 'text').map(p => p.text ?? '').join('');
       if (!text.trim()) {
         const kinds = response.parts.map(p => p?.type || '?').join(', ') || 'none';
         throw failure('OpenCode returned no visible text (part types: ' + kinds + ')', 'EMPTY_RESPONSE');
       }
+      const dshToolCall = parseToolRequest(text, tools);
       if (key) {
         this.sessions.delete(key);
         this.sessions.set(key, { id: session.id, count: messages.length, fingerprint: fingerprint(messages) });
         if (this.sessions.size > 100) this.sessions.delete(this.sessions.keys().next().value);
       }
       this.blocked = null;
-      return response;
+      return { ...response, dshToolCall };
     } catch (error) {
       if (key) this.sessions.delete(key); // A failed turn may already be in OpenCode's history.
       if (BLOCKED_CODES.has(error.code)) this.blocked = { error, until: Date.now() + 60_000 };
@@ -192,11 +203,21 @@ export function createAdapter(config = {}, fetchImpl) {
           return;
         }
         const response = await client.complete({ ...options, model: id });
-        const content = response.parts.filter(part => part?.type === 'text').map(part => part.text || '').join('');
-        yield* textChunks(content);
+        const tool = response.dshToolCall;
+        if (tool) {
+          yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+          yield { type: 'tool-call-delta', index: 0, id: tool.id, name: tool.name,
+            argumentsDelta: tool.arguments };
+          yield { type: 'block-end', index: 0, block: { type: 'tool-call', ...tool } };
+        } else {
+          const content = response.parts.filter(part => part?.type === 'text')
+            .map(part => part.text || '').join('');
+          yield* textChunks(content);
+        }
         const usage = response.info?.tokens;
         if (usage) yield { type: 'usage', usage: { inputTokens: Number(usage.input) || 0, outputTokens: Number(usage.output) || 0 } };
-        yield { type: 'finish', reason: { kind: response.info?.finish === 'length' ? 'max-tokens' : 'stop' } };
+        yield { type: 'finish', reason: { kind: tool ? 'tool-calls'
+          : response.info?.finish === 'length' ? 'max-tokens' : 'stop' } };
       } };
     },
   };
