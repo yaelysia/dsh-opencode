@@ -382,3 +382,28 @@ test('ordinary streamed text before a guarded native call remains a text block b
   assert.equal(chunks[2].block.text, 'Checking ');
   assert.equal(chunks[4].name, 'glob');
 });
+
+test('SSE guards native tool intent across multiple assistant message IDs in one request', async () => {
+  const later = {
+    type: 'tool', id: 'later-native', sessionID, messageID: 'assistant-step-2',
+    tool: 'read', state: { status: 'error', input: { filePath: 'text.txt' },
+      error: 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED' },
+  };
+  const upstream = fixture({ responseText: 'Intermediate reply', plan({ send }) {
+    send('message.updated', { sessionID,
+      info: { id: 'assistant-step-2', role: 'assistant', sessionID } });
+    send('message.part.updated', { sessionID, part: later });
+  } });
+  const dshTools = [{ name: 'read', description: 'Read via DSH',
+    parameters: { type: 'object',
+      properties: { file_path: { type: 'string' } }, required: ['file_path'] } }];
+  const task = consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, upstream.fetch), { tools: dshTools }));
+  await upstream.posted;
+  await sleep(25);
+  upstream.finish();
+  const chunks = await task;
+  assert.equal(chunks.find(chunk => chunk.type === 'tool-call-delta')?.name, 'read');
+  assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
+});

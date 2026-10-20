@@ -85,12 +85,15 @@ export class SessionEventAccumulator {
     if (type !== 'message.part.updated' && type !== 'message.part.delta') return;
     const part = p.part;
     const messageId = p.messageID ?? part?.messageID;
-    if (!this.assistantId || messageId !== this.assistantId) return;
+    // One OpenCode /message request can produce multiple assistant steps.
+    // Track guarded native attempts across ALL steps in this session;
+    // limiting them to the first assistant would miss later tool events.
     if (type === 'message.part.updated' && part?.type === 'tool') {
       this.nativeToolSeen = true;
       if (typeof part.id === 'string') this.nativeToolParts.set(part.id, part);
       return;
     }
+    if (!this.assistantId || messageId !== this.assistantId) return;
     if (this.nativeToolSeen) return;
     const partId = p.partID ?? part?.id;
     if (typeof partId !== 'string') return;
