@@ -53,6 +53,9 @@ jobs:
           chmod +x "$executable"
           echo "OPENCODE_TEST_EXE=$executable" >> "$GITHUB_ENV"
       - run: node --test integration/opencode-native-guard-smoke.mjs
+      # The model is a loopback mock: this checks real OpenCode's tool event
+      # and native guard state without using any free-tier/cloud model quota.
+      - run: node --test integration/opencode-real-native-event-smoke.mjs
 
   opencode-1-19-3-windows-guard-smoke:
     runs-on: windows-latest
