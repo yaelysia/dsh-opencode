@@ -155,6 +155,11 @@ export class OpenCodeServeClient {
         throw failure('OpenCode returned no visible text (part types: ' + kinds + ')', 'EMPTY_RESPONSE');
       }
       const dshToolCall = parseToolRequest(text, tools);
+      // A truncated tool request must never be dispatched, even if its JSON parsed.
+      if (dshToolCall && response.info?.finish === 'length') {
+        throw failure('Truncated model output cannot authorize a DSH tool call',
+          'INCOMPLETE_TOOL_CALL');
+      }
       if (key) {
         this.sessions.delete(key);
         this.sessions.set(key, { id: session.id, count: messages.length, fingerprint: fingerprint(messages) });
