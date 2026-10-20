@@ -8,25 +8,25 @@ export const name = 'opencode-serve';
 export const inject = ['llm'];
 
 export const Config = Schema.object({
-  endpoint: Schema.string().default('http://127.0.0.1:4096'),
+  endpoint: Schema.string().default('http://127.0.0.1:4096').volatile(),
   backendProviderId: Schema.string().default('opencode'),
   providerId: Schema.string().default('opencode-serve'),
   agent: Schema.string().default(BRIDGE_AGENT_ID),
-  username: Schema.string().default('opencode'),
-  passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
-  localTitles: Schema.boolean().default(true),
-  toolBridgeEnabled: Schema.boolean().default(true),
-  guardedReadCompatibility: Schema.boolean().default(false),
+  username: Schema.string().default('opencode').volatile(),
+  passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD').volatile(),
+  localTitles: Schema.boolean().default(true).volatile(),
+  toolBridgeEnabled: Schema.boolean().default(true).volatile(),
+  guardedReadCompatibility: Schema.boolean().default(false).volatile(),
   // SSE is experimental until the user's actual OpenCode service is verified.
-  ssePreviewEnabled: Schema.boolean().default(false),
-  strictOwnedServer: Schema.boolean().default(true),
-  autoStart: Schema.boolean().default(true),
-  autoStartDirect: Schema.boolean().default(true),
-  opencodeExecutable: Schema.string().default(''),
-  runtimeRoot: Schema.string().default(''),
-  autoStartTimeoutMs: Schema.number().default(15000),
-  timeoutMs: Schema.number().default(120000),
-  models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]),
+  ssePreviewEnabled: Schema.boolean().default(false).volatile(),
+  strictOwnedServer: Schema.boolean().default(true).volatile(),
+  autoStart: Schema.boolean().default(true).volatile(),
+  autoStartDirect: Schema.boolean().default(true).volatile(),
+  opencodeExecutable: Schema.string().default('').volatile(),
+  runtimeRoot: Schema.string().default('').volatile(),
+  autoStartTimeoutMs: Schema.number().default(15000).volatile(),
+  timeoutMs: Schema.number().default(120000).volatile(),
+  models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]).volatile(),
 });
 
 class ModelAdapter extends LlmAdapter {
@@ -36,15 +36,25 @@ class ModelAdapter extends LlmAdapter {
   }
 }
 
+// SettingsForms publishes Volatile<T> references. Pin one coherent config
+// snapshot for every OpenCode child/adapter lifetime; saving the UI requires
+// a Desktop restart before the new transport/security boundaries take effect.
+export function configSnapshot(config) {
+  return Object.fromEntries(Object.entries(config).map(([field, value]) => [
+    field, value && typeof value === 'object' && typeof value.get === 'function' ? value.get() : value,
+  ]));
+}
+
 export function apply(ctx, config) {
-  const supervisor = new OpenCodeService(config, { logger: ctx.logger });
-  const provider = config.providerId || 'opencode-serve';
+  const options = configSnapshot(config);
+  const supervisor = new OpenCodeService(options, { logger: ctx.logger });
+  const provider = options.providerId || 'opencode-serve';
   ctx.llm.registerAdapter([provider], new ModelAdapter({
-    ...config,
+    ...options,
     passwordProvider: () => supervisor.passwordForClient(),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
-      requireManaged: config.strictOwnedServer !== false || requireManaged === true
-        || config.guardedReadCompatibility === true,
+      requireManaged: options.strictOwnedServer !== false || requireManaged === true
+        || options.guardedReadCompatibility === true,
     }),
   }, ctx.logger));
   ctx.llm.registerConfigurableProviders?.([{

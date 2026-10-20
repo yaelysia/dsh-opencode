@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LlmAdapter, BlockAssembler, createToolResultMessage } from '@deepseek-ai/dsh-llm';
-import { apply, Config, name } from '../index.js';
+import { apply, Config, configSnapshot, name } from '../index.js';
 import { createAdapter } from '../src/bridge.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -138,4 +138,29 @@ test('real DSH BlockAssembler accepts SSE deltas before the OpenCode reply settl
   assert.equal(assembler.finish.kind, 'stop');
   assert.equal(assembler.message({ provider: 'opencode-serve', model }).content[0].text,
     'Before completion');
+});
+
+test('settings are exposed as DSH Volatile references and snapshotted for server lifetimes', () => {
+  const config = Config({
+    guardedReadCompatibility: true,
+    ssePreviewEnabled: false,
+    autoStart: true,
+    endpoint: 'http://127.0.0.1:4096',
+    models: ['deepseek-v4.1-flash-free'],
+  });
+  for (const key of [
+    'guardedReadCompatibility', 'ssePreviewEnabled', 'autoStart', 'endpoint',
+    'models', 'toolBridgeEnabled', 'localTitles', 'autoStartDirect', 'timeoutMs',
+  ]) {
+    assert.equal(typeof config[key].get, 'function',
+      key + ' must be editable via DSH settings and have a live getter');
+  }
+  const options = configSnapshot(config);
+  assert.equal(options.guardedReadCompatibility, true);
+  assert.equal(options.ssePreviewEnabled, false);
+  assert.equal(options.autoStart, true);
+  assert.deepEqual(options.models, ['deepseek-v4.1-flash-free']);
+  assert.equal(typeof options.endpoint, 'string');
+  assert.equal(typeof options.timeoutMs, 'number');
+  assert.equal(typeof options.providerId, 'string');
 });

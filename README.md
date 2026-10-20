@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.4`（隔离读权限兼容性实验）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.5`（内置插件配置页）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -65,6 +65,18 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 
 模型 ID 可以配置；出现在下拉列表中**不代表**当前网络和账户一定能成功调用。
 
+### 配置页（不需要手动编辑 YAML）
+
+DSH Desktop **侧边栏 → 插件 → 已安装插件 → dsh-opencode → 组件 `opencode-serve` 右侧的「配置」**。
+
+此页面由本插件自己的浏览器半侧提供（DSH 官方 `plugins.row.config` 扩展点），使用 DSH 的设置表单模型、提交与恢复默认功能。保存后，DSH 将配置持久化到它自己维护的 profile 配置中；不需要用户新建 `cordis.patch.yml` 条目，也不需要后续自行清理。曾通过 DSH 自己的配置机制保存的字段可在页面点「恢复默认」来撤销覆盖。
+
+页面分为「模型与工具」「本地服务」「高级配置」：覆盖 `guardedReadCompatibility`、`ssePreviewEnabled`、工具桥接、本地标题、自动启动、代理处理、服务地址、运行目录、模型列表和超时等可配置项。普通模式保持 `guardedReadCompatibility=false` 和 `ssePreviewEnabled=false`，只有明确测试时才开启实验功能。
+
+**保存后完整重启 DSH Desktop**：这套桥接将 OpenCode 子进程、安全守卫和模型注册绑定在插件启动时，因此修改页面中的值后，运行中的实例暂不热切换。关闭 DSH 前应停止当前模型生成，不要在有执行中任务时改动。
+
+没有「配置」按钮时：首先确认安装的是 `0.2.0-alpha.5` 及以上，且 `dsh-opencode` 组合包已启用；此版本直接附带预构建的 `lib/client.js`，无需另执行 npm 安装脚本或构建。
+
 ## 主要配置
 
 | 配置项 | 默认值 | 作用 |
@@ -77,7 +89,7 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 | `runtimeRoot` | 自动计算 | 独立工作目录与运行数据 |
 | `strictOwnedServer` | `true` | 默认拒绝未托管服务；带 DSH 工具的请求总是要求托管服务 |
 | `toolBridgeEnabled` | `true` | 文本工具协议；关闭后收到 DSH 工具会明确报错 |
-| `guardedReadCompatibility` | `false` | 实验性 OpenCode 1.19.3 免费模型兼容性：对模型声明 `read: allow`，但必须由成功加载的本地拦截插件拒绝所有原生工具执行；需要独占的托管服务 |
+| `guardedReadCompatibility` | `false` | 实验性 OpenCode 1.19.3 免费模型兼容性：对模型声明 `read: allow`，但由已加载的本地守卫拒绝所有原生工具执行；在插件配置页中开启 |
 | `ssePreviewEnabled` | `false` | SSE 增量输出预览；仅手动设置 `true` 才会开启。旧版保存的 `streamingEnabled=true` 不再生效，避免自动启用未经验证的流式路径 |
 | `localTitles` | `true` | 标题不调用云端模型 |
 | `timeoutMs` | `120000` | 本机模型请求超时（毫秒） |
@@ -132,7 +144,7 @@ node .\scripts\doctor.mjs --stream-probe
 
 ### 隔离 read 兼容性测试（实验性）
 
-仅在默认模式的普通会话仍返回 `CLIENT_RESTRICTED`、且已经停止旧手动 OpenCode 进程时，进入 DSH 插件配置，把 **`guardedReadCompatibility` 设为 `true`** 并完整重启 DSH。不要同时开启 SSE 预览，首先测试纯文本回复。
+仅在默认模式的普通会话仍返回 `CLIENT_RESTRICTED`、且已经停止旧手动 OpenCode 进程时，打开上面的**插件配置页**，将 **「受保护的 read 兼容模式」开启**，保存后完整重启 DSH。不要同时开启 SSE 预览，首先测试纯文本回复。
 
 这个测试模式在模型可见配置中恢复 0.1.5 的 `read: allow`，但不授予真正的 OpenCode `read` 执行权：我们使用官方 `tool.execute.before` 钩子同步拦截所有原生工具；仅当钩子配置回调生成的随机标记被宿主确认后，才开始模型请求。没有标记或子进程非插件所有时一律失败，不降级为有实际读取权限的进程。
 
