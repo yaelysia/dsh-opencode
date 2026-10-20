@@ -135,6 +135,34 @@ test('the DSH client factory contributes settings directly to the bundle detail 
   });
   assert.ok(ui);
   assert.ok(ui.props.children?.length, 'the settings form receives actual input sections');
+  const nodes = [];
+  const visit = node => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node || typeof node !== 'object') return;
+    nodes.push(node);
+    visit(node.props?.children);
+  };
+  visit(ui);
+  const resetAll = nodes.find(node => node.type === 'button'
+    && node.props?.children?.includes(dictionaries.zh.resetAll));
+  assert.ok(resetAll, 'the page must offer an in-UI way to clean saved overrides');
+  const resetCalls = [];
+  const pageWithReset = registration.component({ view: 'page',
+    t: key => dictionaries.zh[key],
+    useOpencodeSettings: select => select(face.hooks.opencodeSettings.getSnapshot()),
+    ...face, resetField: field => resetCalls.push(field),
+  });
+  const updatedNodes = [];
+  const collect = node => {
+    if (Array.isArray(node)) return node.forEach(collect);
+    if (!node || typeof node !== 'object') return;
+    updatedNodes.push(node);
+    collect(node.props?.children);
+  };
+  collect(pageWithReset);
+  updatedNodes.find(node => node.type === 'button'
+    && node.props?.children?.includes(dictionaries.zh.resetAll)).props.onClick();
+  assert.deepEqual(resetCalls.sort(), Object.keys(model.specs).sort());
   const summary = registration.component({ view: 'summary', t: key => dictionaries.en[key],
     useOpencodeSettings: select => select(face.hooks.opencodeSettings.getSnapshot()), ...face });
   assert.equal(summary, dictionaries.en.description);
