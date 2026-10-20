@@ -132,9 +132,18 @@ test('official OpenCode 1.19.3 completes a guarded native tool through a mocked 
     // OpenCode /global/health becomes healthy before its plugin/agent
     // registry is initialized. Wait for the actual guard callback proof.
     let guardReady = false;
-    for (let i = 0; i < 105 && !guardReady; i++) {
-      guardReady = await readFile(marker, 'utf8').then(text => text === nonce)
-        .catch(() => false);
+    for (let i = 0; i < 100 && !guardReady; i++) {
+      try {
+        // OpenCode defers its configuration/plugin registry until an agent
+        // lookup. Health alone cannot initialize the guard.
+        const response = await fetch(origin + '/agent', {
+          headers, signal: AbortSignal.timeout(5000),
+        });
+        const agents = response.ok ? await response.json() : [];
+        if (Array.isArray(agents) && agents.some(a => a.name === BRIDGE_AGENT_ID)) {
+          guardReady = await readFile(marker, 'utf8').then(t => t === nonce).catch(() => false);
+        }
+      } catch { /* Still warming up. */ }
       if (!guardReady) await new Promise(resolve => setTimeout(resolve, 400));
     }
     assert.equal(guardReady, true, 'native tool guard must register before test calls');
