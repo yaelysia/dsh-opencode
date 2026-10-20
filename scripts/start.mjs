@@ -22,7 +22,8 @@ export async function ensurePortFree(port) {
 export async function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({ args, options: {
     exe: { type: 'string' }, port: { type: 'string', default: '4096' }, root: { type: 'string' },
-    model: { type: 'string' }, direct: { type: 'boolean', default: false }, probe: { type: 'boolean', default: false },
+    model: { type: 'string' }, direct: { type: 'boolean', default: false },
+    probe: { type: 'boolean', default: false }, 'stream-probe': { type: 'boolean', default: false },
   } });
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
@@ -70,7 +71,7 @@ export async function main(args = process.argv.slice(2)) {
       throw new Error('OpenCode did not become healthy; check its output above');
     })();
     await Promise.race([ready, exited.then(({ code }) => { throw new Error('OpenCode exited before becoming ready: ' + code); })]);
-    const report = await diagnose({ endpoint, probe: values.probe, model: values.model, env,
+    const report = await diagnose({ endpoint, probe: values.probe, streamProbe: values['stream-probe'], model: values.model, env,
       passwordProvider: () => password, username: env.OPENCODE_SERVER_USERNAME });
     report.launch = { directRequested: values.direct, systemVpnChanged: false };
     const file = path.join(root, 'opencode-diagnostic-' + Date.now() + '.json');

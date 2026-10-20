@@ -13,7 +13,7 @@ export function proxySummary(env = process.env) {
 export async function diagnose(options = {}, fetchImpl) {
   const model = options.model || DEFAULT_MODELS[0];
   const report = { schemaVersion: 1, at: new Date().toISOString(),
-    proxyVariablesPresent: proxySummary(options.env), probe: { requested: Boolean(options.probe), attempted: false },
+    proxyVariablesPresent: proxySummary(options.env), probe: { requested: Boolean(options.probe || options.streamProbe), attempted: false },
   };
   try {
     const client = new OpenCodeServeClient({ ...options, timeoutMs: 10_000 }, fetchImpl);
@@ -41,11 +41,36 @@ export async function diagnose(options = {}, fetchImpl) {
     if (!Array.isArray(agents)) throw failure('Unrecognized OpenCode agent response', 'CATALOG_ERROR');
     report.agent = { name: client.agent, listed: agents.some(a => a.name === client.agent) };
     if (!report.agent.listed) throw failure('Requested agent missing from OpenCode server', 'AGENT_NOT_FOUND');
-    if (options.probe) {
+    if (options.probe || options.streamProbe) {
       if (!model.endsWith('-free')) throw failure('Diagnostic probe only accepts explicit -free model IDs', 'INVALID_REQUEST');
       client.timeoutMs = 90_000;
       report.probe = { requested: true, attempted: true, model };
-      const output = await client.complete({ model, messages: [{ role: 'user', content: 'Reply with exactly the digit 1.' }] });
+      let output;
+      if (options.streamProbe) {
+        const started = Date.now();
+        const snapshots = [];
+        for await (const item of client.streamResponse({
+          model, messages: [{ role: 'user', content:
+            'Write the integers from 1 to 40, separated by commas. No additional text.' }],
+        })) {
+          if (item.kind === 'snapshot') {
+            snapshots.push({ milliseconds: Date.now() - started, chars: item.text.length });
+          } else {
+            output = item.response;
+          }
+        }
+        report.probe.streaming = {
+          observedSnapshots: snapshots.length,
+          firstSnapshotMs: snapshots[0]?.milliseconds ?? null,
+          lastSnapshotChars: snapshots.at(-1)?.chars ?? 0,
+          responseMs: Date.now() - started,
+        };
+        if (!snapshots.length) {
+          throw failure('OpenCode SSE did not deliver any assistant text while the model was responding', 'SSE_NO_DELTAS');
+        }
+      } else {
+        output = await client.complete({ model, messages: [{ role: 'user', content: 'Reply with exactly the digit 1.' }] });
+      }
       report.probe.text = redact(output.parts.filter(p => p.type === 'text').map(p => p.text).join('')).slice(0, 80);
       if (output.info?.modelID) report.probe.reportedModel = output.info.modelID;
     }
@@ -62,9 +87,10 @@ export async function diagnose(options = {}, fetchImpl) {
 export async function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({ args, options: {
     endpoint: { type: 'string' }, model: { type: 'string' }, agent: { type: 'string' },
-    probe: { type: 'boolean', default: false }, out: { type: 'string' },
+    probe: { type: 'boolean', default: false }, 'stream-probe': { type: 'boolean', default: false },
+    out: { type: 'string' },
   } });
-  const report = await diagnose(values);
+  const report = await diagnose({ ...values, streamProbe: values['stream-probe'] });
   const json = JSON.stringify(report, null, 2) + '\n';
   if (values.out) await writeFile(values.out, json, { mode: 0o600 });
   console.log(json);

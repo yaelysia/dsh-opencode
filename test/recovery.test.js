@@ -275,3 +275,27 @@ test('doctor can authenticate against independently launched managed diagnostics
   });
   assert.equal(report.ok, true);
 });
+
+test('explicit streaming diagnostic fails visibly without SSE events or fallback retries', async () => {
+  let messages = 0;
+  const report = await diagnose({ streamProbe: true }, async (url) => {
+    if (url.endsWith('/global/health')) return Response.json({ healthy: true, version: '1.19.3' });
+    if (url.endsWith('/provider')) return Response.json({
+      all: [{ id: 'opencode', models: { [model]: { id: model } } }],
+    });
+    if (url.endsWith('/agent')) return Response.json([{ name: 'dsh-bridge' }]);
+    if (url.endsWith('/session')) return Response.json({ id: 'probe-session' });
+    if (url.endsWith('/event')) return Response.json({ error: 'not supported' }, { status: 404 });
+    if (url.endsWith('/message')) {
+      messages++;
+      return Response.json({ info: { modelID: model },
+        parts: [{ type: 'text', text: '1, 2, 3' }] });
+    }
+    throw Error('Unexpected endpoint ' + url);
+  });
+  assert.equal(report.ok, false);
+  assert.equal(report.error.code, 'SSE_NO_DELTAS');
+  assert.equal(report.probe.attempted, true);
+  assert.equal(report.probe.streaming.observedSnapshots, 0);
+  assert.equal(messages, 1, 'the diagnostic must not retry or use a fallback model');
+});

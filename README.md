@@ -91,9 +91,11 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 node .\scripts\start.mjs --probe
 # 网络环境需要绕开 HTTP(S)/ALL_PROXY 时才加 --direct
 node .\scripts\start.mjs --direct --probe
+# 只运行一次免费模型请求，测量当前 OpenCode 是否真正发送增量 SSE
+node .\scripts\start.mjs --stream-probe
 ```
 
-该脚本在独立运行目录启动隔离服务、随机生成 Basic Auth 密码、进行健康与模型目录检查；`--probe` 才会对明确指定的免费模型发送一次固定推理请求。完成后生成 `OpenCodeRuntime/opencode-diagnostic-*.json`。
+该脚本在独立运行目录启动隔离服务、随机生成 Basic Auth 密码、进行健康与模型目录检查；`--probe` / `--stream-probe` 才会对明确指定的免费模型发送一次推理请求；后者要求实际收到 SSE 文本事件，否则返回 `SSE_NO_DELTAS`，并在报告中记录快照数、首个增量时间和响应完成时间。不发送第二次或自动重试。完成后生成 `OpenCodeRuntime/opencode-diagnostic-*.json`。
 
 **诊断脚本启动的服务不属于 DSH 插件。** 不要将其当作默认安全模式下的 DSH 服务使用；结束诊断后按 `Ctrl+C` 关闭，再让 DSH 自动启动并拥有自己的进程。
 
@@ -102,6 +104,8 @@ node .\scripts\start.mjs --direct --probe
 ```powershell
 node .\scripts\doctor.mjs
 node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
+# 专门检查是否存在真实增量 SSE（会发起一次免费模型请求）
+node .\scripts\doctor.mjs --stream-probe
 ```
 
 手动服务设置了密码时，应在诊断进程环境中提供对应的 `OPENCODE_SERVER_PASSWORD`；随机生成的托管服务密码不会向其他终端公开。
@@ -118,6 +122,7 @@ node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
 | `MODEL_NOT_FOUND` / `MODEL_MISMATCH` | 服务缺少指定模型，或服务返回了其他模型 |
 | `INVALID_TOOL_CALL` / `UNDECLARED_TOOL_CALL` | 模型未按协议输出，或请求了 DSH 未声明的工具 |
 | `OPENCODE_TOOL_BOUNDARY` | 返回了 OpenCode 原生工具事件，插件拒绝该响应 |
+| `SSE_NO_DELTAS` | 显式流式探针没有收到任何助手文本事件；检查 OpenCode 版本与其 SSE 发布情况 |
 
 网络或客户端拒绝后，当前插件实例短时冷却以避免重复请求；冷却不代表网络封禁会自行解除。
 
