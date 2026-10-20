@@ -118,7 +118,7 @@ test('the DSH client factory contributes settings directly to the bundle detail 
   const face = registration.options.inject();
   const model = created[0];
   assert.deepEqual(Object.keys(model.specs).sort(), [
-    'guardedReadCompatibility','ssePreviewEnabled','toolBridgeEnabled',
+    'structuredToolsEnabled','guardedReadCompatibility','ssePreviewEnabled','toolBridgeEnabled',
     'localTitles','strictOwnedServer','autoStart','autoStartDirect',
     'endpoint','opencodeExecutable','runtimeRoot','username','passwordEnv',
     'timeoutMs','autoStartTimeoutMs','models',

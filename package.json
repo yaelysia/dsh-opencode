@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode",
-  "version": "0.2.0-alpha.12",
+  "version": "0.2.0-alpha.13",
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -18,7 +18,8 @@
   "scripts": {
     "test": "node --test",
     "doctor": "node scripts/doctor.mjs",
-    "start:opencode": "node scripts/start.mjs"
+    "start:opencode": "node scripts/start.mjs",
+    "test:structured": "node --test integration/structured-plugin-poc.mjs"
   },
   "dsh": {
     "client": {
@@ -43,5 +44,5 @@
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
     "@deepseek-ai/schemastery": "^3.18.4"
   },
-  "description": "OpenCode free-model bridge for DSH with isolated tool authority"
+  "description": "DSH OpenCode bridge with managed structured tools and optional legacy transport"
 }

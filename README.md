@@ -1,193 +1,103 @@
 # dsh-opencode
 
-通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
+将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前版本：`0.2.0-alpha.12`（DSH 文本工具协议容错与安全校验）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前：0.2.0-alpha.13，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
-## 工作原理
+## 安装与使用：只需操作 DSH
 
-```text
-DSH Agent
-  └─ GenerateOptions（系统提示 / 历史消息 / DSH 工具定义）
-       └─ dsh-opencode（LlmAdapter）
-            └─ 本机 OpenCode serve（隔离的 dsh-bridge Agent）
-                 └─ OpenCode 模型推理
-                      ├─ 普通文本 → DSH 回复
-                      └─ DSH_TOOL_CALL_V1 → DSH tool-call
-                                             └─ DSH 授权 / 执行 / 拒绝
-                                                  └─ 工具结果进入下一轮模型请求
-```
+环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）、Node.js >=22.19.0，以及已安装的 OpenCode 官方 CLI（当前验证 1.19.3）。插件会发现已有 CLI；**本版本不负责下载或安装 CLI 本身**。
 
-**OpenCode 原生工具不具备执行权限。** 托管子进程采用 `permission: { "*": "deny" }`，隔离项目配置、插件、MCP 和其他 Agent。工具请求只转换为 DSH 的 `tool-call` 流块，代码本身不执行工具。
-
-### 已实现
-
-- 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
-- **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
-- DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
-- **文本工具协议容错**：对唯一、完整且位于回复末尾的 `DSH_TOOL_CALL_V1:` 请求，允许模型先输出一段说明；若模型把 `pattern/path/file_path` 等参数直接放在顶层，只有在这些字段全部属于本轮 DSH 工具 Schema 且必填项齐全时，才恢复为标准 `arguments` 对象。对双引号路径字段中不规范的 Windows 单反斜杠进行最小转义修正，已正确转义的路径保持不变。多重工具标记、未声明工具、额外字段及无法确定的 JSON 仍拒绝，绝不跳过 DSH 授权。SSE 允许先显示说明文字，但不会把工具 JSON 当作自然语言流式展示。
-- **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。
-- **被拦截工具证明**：受保护兼容模式的 OpenCode 子进程会在 `tool.execute.before` 拒绝原生工具前，追加只含随机启动证明、Session ID、调用 ID 和工具名的本地审计记录。即使 OpenCode 将异常包装成通用错误，桥接也仅在核实该拒绝记录、工具最终状态为 `error` 且不存在执行证据后，才能将其转交 DSH；没有证明仍拒绝。审计不存储工具参数或文件内容，退出时清理。
-- 如果最终状态已确认为 `error` 且启动守卫审计验证成功，不再额外要求 OpenCode 必须提供字符串格式的异常正文；仍严格拒绝 `completed`、`providerExecuted` 和无守卫证明的事件。
-- **中文规则**：DSH 的 `agent-instructions` 工作区消息（如 `AGENTS.md`）明确进入上游 system 输入中的低于 system/developer 的用户指令段，不再仅淹没在扁平化的历史文本内。
-- **动态中文输出约束**：识别真正的用户消息，忽略随后自动注入的英文运行时上下文。中文任务默认要求简体中文回复，包括可见工具前进度文字；用户明确要求另一语言时除外。
-- **工具交接以当前轮次消息历史为准**：只要本轮启用了 DSH 工具且处于受守卫模式，就读取官方只读 `GET /session/:id/message?limit=80`。通过此次最终 assistant ID 与最近的 user 消息严格划分本轮，识别其中所有原生工具结果；不再依赖 SSE 是否碰巧捕获工具事件，上一轮的调用也不会重复提交。未持久化完成时最多重查两次，不重发模型请求。只有确认本地守卫拒绝且符合 DSH 工具白名单的意图才会成为 DSH tool-call。
-- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
-- **SSE 最终纠正**：`/event` 增量是预览，完整 `/message` 响应才是最终文本。当两者不一致时由 DSH `block-end` 纠正内容，不会在成功生成后抛出 `STREAM_MISMATCH`。诊断只记录字符数，不记录正文。
-- 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
-- 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
-- **可选受保护的 read 兼容性实验**：对照 0.1.5 的 `read: allow` 声明，保持其他原生工具禁用；额外注册仅属于托管 OpenCode 子进程的 `tool.execute.before` 拦截插件。插件拒绝每次 OpenCode 原生工具执行，并在启动时写入一次性随机证明；证明校验失败，则拒绝模型调用。该模式未在真实 OpenCode 免费模型联测验证，默认禁用。
-- 本机随机 Basic Auth、独立运行目录、代理环境变量的子进程级处理。
-- `session-title` 请求本地提取首条有效用户消息（不额外调用云模型）。
-
-### 目前限制
-
-- 工具调用仍使用**实验性单条文本协议** `DSH_TOOL_CALL_V1:{"name":"...","arguments":{...}}`，或在受保护模式下处理一次经守卫拒绝的原生工具意图，并非完整原生 Function Calling。一次模型响应只能交付一个 DSH 工具请求；多个被拦截的原生请求按顺序只选第一个，绝不批量执行。
-- **流式输出依赖 OpenCode SSE 实际提供文本事件。** 如果 OpenCode 只发送心跳、事件接口失效或丢失增量，插件会等待 `/message` 的最终回复，不伪造逐 token 输出。OpenCode 1.18.x 曾出现 SSE 丢事件问题，1.19.3 的真实 Desktop 表现仍需验收。
-- 工具协议 JSON 前缀和后续参数会被缓冲；受守卫拒绝的原生工具意图也须完整验证、匹配当轮 DSH schema。只有检查通过才向 DSH 发送 `tool-call`，绝不把半截 JSON 当成已批准操作。
-- OpenCode `serve` 消息接口不直接接收动态 DSH 工具函数定义；温度、停止序列、最大输出 token 等请求控制目前也没有完整的原生映射，不应依赖它们得到精确语义。
-- 目前只声明文本输入模型；并不提供图像输入/生成能力。
-- **工具选择偏好依旧依赖模型遵循提示词**：此版本会完整传递 DSH 的 system/developer 约束，但不能保证模型永不提出 `pwsh` 调用。若要技术上彻底禁止某类 shell 操作，需要在 DSH 宿主权限策略或工具层实施拒绝，而不应偷偷移除用户有权使用的工具。DSH `pwsh` 在未传 `workdir` 时会读取 DSH session working-directory；实际目录不正确时，应结合对应会话 `tool/call` 和 `tool/result` 定位，不应让 OpenCode 的隔离目录取代它。\n- 尚未通过真实 DSH Desktop 的授权 UI、允许/拒绝与连续工具调用验收。
-
-## 环境要求
-
-- DSH `0.2.x`（开发测试对照 `0.2.1-rc.2 Desktop`）。
-- Node.js `>=22.19.0`，或由 DSH Desktop 提供符合要求的 Node 环境。
-- 可运行的 OpenCode 官方 CLI；Windows 默认查找 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe`。其他平台默认从 `PATH` 查找 `opencode`。
-
-## 安装与升级
-
-在 DSH Desktop 的插件页面以 Git 来源安装当前 PR 分支：
+在 DSH 插件页以 Git 来源安装：
 
 ```text
 git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 ```
 
-需要复现固定版本时，将分支名替换成 PR 最新的完整 commit SHA。**更新后完整退出并重新启动 DSH Desktop**。
+复现某个版本时，将分支名换成完整提交 SHA。更新后完整退出并重启 DSH Desktop。
 
-如 `127.0.0.1:4096` 已被之前手工运行的 `opencode serve` 占用，先在其控制台按 `Ctrl+C` 停止，再启动 DSH。默认安全模式只允许插件启动并拥有的服务，不会接管或杀死未知进程。
+进入 **插件 → 已安装插件 → dsh-opencode**，配置表单直接显示在详情页。开启 **「结构化工具通道（实验）」**，保存并重启后即可使用新通道；需要实时预览时同时打开「SSE 流式输出预览」。默认模型列表提供 `deepseek-v4.1-flash-free`、`glm-5.3-flash-free`，是否可用仍取决于 OpenCode 网关、账户与网络。
 
-首次验证建议使用两个默认模型之一：
+**不需要**另外安装 OpenCode 插件、修改 OpenCode 配置文件、手动运行启动命令或清理 YAML。DSH 插件自动完成后台插件装载、回环通信端口分配、随机认证、隔离 Agent 配置和子进程管理。退出/卸载会释放等待的工具回调并停止自身进程，不终止未知外部进程。
 
-- `deepseek-v4.1-flash-free`
-- `glm-5.3-flash-free`
+如果旧的手动服务仍占用 `127.0.0.1:4096`，插件不会擅自接管它；关闭那一个已知旧服务后再让 DSH 自动启动。Windows 默认查找 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe`，也可在 DSH 高级配置中指定路径。
 
-模型 ID 可以配置；出现在下拉列表中**不代表**当前网络和账户一定能成功调用。
+## 新通道如何交接工具
 
-### 配置页（不需要手动编辑 YAML）
+```text
+DSH 当前工具目录与指令
+  → 本机 OpenCode 的原生 dsh_call(name, arguments)
+  → 仅本机可访问的认证通信端口（不执行文件或命令）
+  → DSH tool-call + finish(tool-calls)，立即交还控制权
+  → DSH 审批、实际执行或拒绝
+  → 下一步返回对应 callId 的真实结果
+  → 释放同一个 OpenCode 请求，继续模型推理
+```
 
-DSH Desktop **侧边栏 → 插件 → 已安装插件 → dsh-opencode**。打开组合包详情后，配置表单直接显示在详情页面（高级配置默认折叠），无需再进入组件或编辑 YAML。
+与旧通道不同，结构化模式不要求模型输出 `DSH_TOOL_CALL_V1` 文本，不修补文本 JSON，也不从失败的原生工具事件反推动作。模型调用已注册的 `dsh_call`；工具名称必须在当前 DSH 白名单中，详细参数和执行权限仍由 DSH 校验。
 
-此页面由本插件自己的浏览器半侧提供（DSH 官方 `plugins.bundle.config` 扩展点），使用 DSH 的设置表单模型、提交与恢复默认功能。保存后，DSH 将配置持久化到它自己维护的 profile 配置中；不需要用户新建 `cordis.patch.yml` 条目，也不需要后续自行清理。曾通过 DSH 自己的配置机制保存的字段可在页面点「恢复默认」来撤销覆盖。
+OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模型步骤，而不是等待整个 OpenCode HTTP 请求完成。因此两端不会因互相等待结果而停住。下一次 DSH 调用把实际执行结果或拒绝信息送回同一个等待中的请求，**不重发初始模型请求、不假造工具成功**。
 
-页面分为「模型与工具」「本地服务」「高级配置」：覆盖 `guardedReadCompatibility`、`ssePreviewEnabled`、工具桥接、本地标题、自动启动、代理处理、服务地址、运行目录、模型列表和超时等可配置项。普通模式保持 `guardedReadCompatibility=false` 和 `ssePreviewEnabled=false`，只有明确测试时才开启实验功能。
+结构化模式自动启用托管服务和工具隔离，旧 read 兼容、外部服务、自动启动开关不控制这个模式；原有配置值不会被改写，关闭新模式后可以回到旧通道。任何新通道错误都不会触发隐式回退或放宽原生工具权限。
 
-**保存后完整重启 DSH Desktop**：这套桥接将 OpenCode 子进程、安全守卫和模型注册绑定在插件启动时，因此修改页面中的值后，运行中的实例暂不热切换。关闭 DSH 前应停止当前模型生成，不要在有执行中任务时改动。
+`read` 声明仅为已观察到的免费模型兼容性保留；后台插件拒绝除 `dsh_call` 以外的原生工具执行。OpenCode 的运行目录不是 DSH 工作区，文件工具由 DSH 按会话工作区解析路径。
 
-没有看到表单时：首先确认安装的是 `0.2.0-alpha.5` 及以上，且 `dsh-opencode` 组合包已启用；此版本直接附带预构建的 `lib/client.js`，无需另执行 npm 安装脚本或构建。
+## 配置与恢复默认
 
-## 主要配置
+表单支持保存、单项恢复默认和恢复全部默认值；由 DSH 原生配置服务持久化。不需要用户创建或维护独立覆盖文件。**保存后完整重启 DSH**：安全边界、模型注册和服务进程按启动时的配置快照创建，不在生成中途热切换。
 
-| 配置项 | 默认值 | 作用 |
+| 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `endpoint` | `http://127.0.0.1:4096` | 官方本地服务地址 |
-| `providerId` / `backendProviderId` | `opencode-serve` / `opencode` | DSH 与 OpenCode 路由 |
-| `agent` | `dsh-bridge` | **固定安全 Agent**，其他值拒绝 |
-| `autoStart` | `true` | 启动插件时管理本地 OpenCode |
-| `autoStartDirect` | `true` | 只为 OpenCode 子进程清除 HTTP(S)/ALL_PROXY 环境变量；不改变系统 VPN/TUN |
-| `runtimeRoot` | 自动计算 | 独立工作目录与运行数据 |
-| `strictOwnedServer` | `true` | 默认拒绝未托管服务；带 DSH 工具的请求总是要求托管服务 |
-| `toolBridgeEnabled` | `true` | 文本工具协议；关闭后收到 DSH 工具会明确报错 |
-| `guardedReadCompatibility` | `false` | 实验性 OpenCode 1.19.3 免费模型兼容性：对模型声明 `read: allow`，但由已加载的本地守卫拒绝所有原生工具执行；在插件配置页中开启 |
-| `ssePreviewEnabled` | `false` | SSE 增量输出预览；仅手动设置 `true` 才会开启。旧版保存的 `streamingEnabled=true` 不再生效，避免自动启用未经验证的流式路径 |
-| `localTitles` | `true` | 标题不调用云端模型 |
-| `timeoutMs` | `120000` | 本机模型请求超时（毫秒） |
-| `passwordEnv` | `OPENCODE_SERVER_PASSWORD` | 连接外部手动服务时的环境变量键；托管服务始终生成新的随机密码 |
+| `structuredToolsEnabled` | `false` | 新结构化通道；开启后后台插件、端口及进程自动管理 |
+| `toolBridgeEnabled` | `true` | 允许向 DSH 交付工具请求；关闭后带工具的请求明确拒绝 |
+| `ssePreviewEnabled` | `false` | 事件流预览；结构化通道的工具交接不依赖 SSE |
+| `localTitles` | `true` | 从用户文本生成标题，不额外请求模型 |
+| `guardedReadCompatibility` | `false` | 仅旧通道的 read 兼容实验；新通道自动处理 |
+| `strictOwnedServer` | `true` | 旧通道默认拒绝外部服务；新通道始终要求托管 |
+| `autoStart` | `true` | 旧通道的自动启动开关；新通道始终自动启动 |
+| `autoStartDirect` | `true` | 仅为子进程清除 HTTP(S)/ALL_PROXY，不修改系统 VPN/TUN |
+| `endpoint` | `http://127.0.0.1:4096` | 模型服务地址；托管模式要求本机回环 HTTP |
+| `opencodeExecutable` / `runtimeRoot` | 自动 | CLI 路径 / 独立运行目录 |
+| `timeoutMs` / `autoStartTimeoutMs` | `120000` / `15000` | 模型生成 / 服务启动超时，单位毫秒 |
+| `username` / `passwordEnv` | `opencode` / `OPENCODE_SERVER_PASSWORD` | 认证设置；托管服务始终生成随机密码 |
+| `models` | 两个默认模型 ID | 可编辑列表；列表出现不代表网关已授权使用 |
 
-自动启动的服务绑定 `127.0.0.1`，子进程使用规范变量 `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME`。未认证请求收到 `401` 是预期行为。不会把密码写入 README、日志或诊断报告。
+## 范围与限制
 
-## 诊断
+结构化模式最多保留 16 个活跃 OpenCode 周期，每个周期最多接收 128 个不同的工具请求。等待 DSH 审批/工具结果最多 10 分钟，期间暂停普通模型超时；取消、超时或卸载会关闭回调。应用重启后不会恢复或重放未完成工具操作。
 
-可以在 Windows 的仓库目录独立检查 OpenCode，而不启动 DSH：
+若上游明确提供 `reasoning` 类型，结构化模式会将其映射到 DSH 思考块，`text` 保持正文；不能根据内容是英文还是中文推断边界。上游若将推理混进普通文本，本版本不会启发式剥离。
 
-```powershell
-node .\scripts\start.mjs --probe
-# 网络环境需要绕开 HTTP(S)/ALL_PROXY 时才加 --direct
-node .\scripts\start.mjs --direct --probe
-# 只运行一次免费模型请求，测量当前 OpenCode 是否真正发送增量 SSE
-node .\scripts\start.mjs --stream-probe
-```
+复杂多模态工具结果、跨应用重启续接以及完整用量归集不在本轮验证范围。当前工具参数的完整 Schema 校验仍在 DSH 宿主，结构化回调负责名称白名单、调用身份与传输约束，不代替宿主授权。
 
-该脚本在独立运行目录启动隔离服务、随机生成 Basic Auth 密码、进行健康与模型目录检查；`--probe` / `--stream-probe` 才会对明确指定的免费模型发送一次推理请求；后者要求实际收到 SSE 文本事件，否则返回 `SSE_NO_DELTAS`，并在报告中记录快照数、首个增量时间和响应完成时间。不发送第二次或自动重试。完成后生成 `OpenCodeRuntime/opencode-diagnostic-*.json`。
+旧通道仍保留文本协议和已验证守卫拒绝的工具意图转换，便于对照与回退；它的已知兼容性问题没有因为新通道发布就被宣称解决。
 
-**诊断脚本启动的服务不属于 DSH 插件。** 不要将其当作默认安全模式下的 DSH 服务使用；结束诊断后按 `Ctrl+C` 关闭，再让 DSH 自动启动并拥有自己的进程。
+## 常见错误
 
-诊断已有且自己能够认证的手动服务时使用：
-
-```powershell
-node .\scripts\doctor.mjs
-node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
-# 专门检查是否存在真实增量 SSE（会发起一次免费模型请求）
-node .\scripts\doctor.mjs --stream-probe
-```
-
-手动服务设置了密码时，应在诊断进程环境中提供对应的 `OPENCODE_SERVER_PASSWORD`；随机生成的托管服务密码不会向其他终端公开。
-
-### 常见错误
-
-| 错误码 | 含义 / 处理 |
+| 错误 | 含义 |
 | --- | --- |
-| `UNTRUSTED_OPENCODE_SERVER` | 端口由插件之外的服务占用；关闭旧服务并重启 DSH |
-| `BRIDGE_AGENT_REQUIRED` | 使用了非 `dsh-bridge` Agent；恢复默认配置 |
-| `GUARD_REQUIRES_MANAGED_SERVER` / `SERVER_GUARD_NOT_READY` | 安全拦截器无法在插件独占的 OpenCode 进程内正常注册；不会继续发送模型请求 |
-| `SERVER_PORT_BUSY` / `SERVER_NOT_INSTALLED` | 检查端口或 OpenCode CLI 路径 |
-| `AUTH` | 本地认证失败；托管服务请重启 DSH，不要使用旧密码 |
-| `NETWORK_BLOCKED` / `CLIENT_RESTRICTED` | OpenCode 网关拒绝，不会绕过限制 |
-| `MODEL_NOT_FOUND` / `MODEL_MISMATCH` | 服务缺少指定模型，或服务返回了其他模型 |
-| `INVALID_TOOL_CALL` / `UNDECLARED_TOOL_CALL` | 模型未按协议输出，或请求了 DSH 未声明的工具 |
-| `OPENCODE_TOOL_BOUNDARY` | 原生工具状态未经证明或存在已执行迹象时拒绝。错误会显示脱敏的工具类型、状态、拒绝标记与审计验证标志，不含路径、参数或正文 |
-| `NATIVE_TOOL_HISTORY_UNAVAILABLE` | SSE 工具事件无法在 OpenCode 官方只读消息历史中验证终态；请求不会交给 DSH 执行 |
-| `GUARDED_TOOL_UNMAPPED` | 安全拦截正常，但第一个原生工具请求无法明确对应当前 DSH 工具定义；不会执行任何工具 |
-| `SSE_NO_DELTAS` | 显式流式探针没有收到任何助手文本事件；检查 OpenCode 版本与其 SSE 发布情况 |
-| `CLIENT_RESTRICTED` | 上游明确拒绝该免费模型请求；可能由服务端免费模型策略、版本或工具权限配置触发。关闭 SSE 不保证解决；不能为了让请求通过而开放 OpenCode 原生工具权限 |
+| `SERVER_PORT_BUSY` / `UNTRUSTED_OPENCODE_SERVER` | 端口由其他服务占用，不能接管 |
+| `SERVER_NOT_INSTALLED` | 未找到 CLI，在 DSH 高级配置中选择已安装文件 |
+| `SERVER_GUARD_NOT_READY` | 后台插件未完成启动证明，拒绝继续模型请求 |
+| `CLIENT_RESTRICTED` / `NETWORK_BLOCKED` / `RATE_LIMIT` | 上游网关拒绝或限流，不自动尝试绕过 |
+| `TOOL_RESULT_REQUIRED` / `TOOL_RESULT_MISMATCH` | DSH 返回结果与当前等待的调用 ID 不符，不能重放 |
+| `TOOL_RESULT_TIMEOUT` | 等待审批或工具结果过久，已结束等待 |
+| `CONCURRENT_STREAM` | 同一 DSH 会话出现重叠模型消费者 |
+| `OPENCODE_TOOL_BOUNDARY` | 发现不允许的原生执行迹象，停止而非降级执行 |
 
-网络或客户端拒绝后，当前插件实例短时冷却以避免重复请求；冷却不代表限制会自行解除。OpenCode 官方 [#51241](https://github.com/anomalyco/opencode/issues/51241) 报告过：禁止 `read` 等工具时即使官方客户端也可能遇到相同的 `CLIENT_RESTRICTED`。与本插件已确认可运行的 0.1.5 SHA `3b489e2b02e377e743f033f1dda020a100c40c70` 对照，0.1.5 为 `read: allow`，当前严格版为 `read: deny`，这是目前最具体的兼容性假设，并非已完成实测的根因结论。
-
-### 隔离 read 兼容性测试（实验性）
-
-仅在默认模式的普通会话仍返回 `CLIENT_RESTRICTED`、且已经停止旧手动 OpenCode 进程时，打开上面的**插件配置页**，将 **「受保护的 read 兼容模式」开启**，保存后完整重启 DSH。不要同时开启 SSE 预览，首先测试纯文本回复。
-
-这个测试模式在模型可见配置中恢复 0.1.5 的 `read: allow`，但不授予真正的 OpenCode `read` 执行权：我们使用官方 `tool.execute.before` 钩子同步拦截所有原生工具；仅当钩子配置回调生成的随机标记被宿主确认后，才开始模型请求。没有标记或子进程非插件所有时一律失败，不降级为有实际读取权限的进程。
-
-**重要限制**：模拟测试可以证明本地安全检查和钩子逻辑，但尚未证明 OpenCode 1.19.3 在真实 Desktop 会正常加载并应用插件，或这个模式一定解决免费模型限制。真实联测前不要执行重要工作；若请求仍被上游拒绝，应保留拒绝状态，不要开放 shell/read 的真实执行权限。
-
-## 真实 DSH Desktop 验收
-
-本 PR 合并前需要完成以下验证：
-
-1. **先保持默认 `ssePreviewEnabled=false` 和 `guardedReadCompatibility=false`**，重新启动 DSH，在新会话发一个普通文本请求，确认同步旧路径是否仍可用。再手动开启 SSE 预览并重启 DSH，观察长文本是否在最终响应前持续出现。如果只有完整回复，则运行 `--stream-probe` 检查 OpenCode 的实际 SSE 事件。
-2. 不带工具的普通文本问答，确认没有 OpenCode Plan/Build 角色干扰。
-3. 使用 DSH 的**只读**文件工具读取测试文件，在 Trajectory 中确认执行者是 **DSH 工具运行时**。
-4. 手动拒绝一次工具授权，确认未发生 OpenCode 内部执行或文件修改。
-5. 在同一会话中继续提问，核对工具结果、错误标记与连续调用能够正确回传。再让模型创建 `text.txt` 并写入 `ok`，在 Trajectory 中核实调用的是 DSH `write({file_path,content})`。
-6. 启用 SSE 预览生成长文本，检查最终回复不会再出现 `STREAM_MISMATCH`；检查错误路径和日志不泄露密码或跨越权限边界。
-
-确认 SSE 增量与最终文本一致，且只读、拒绝、继续三条路径通过后才取消 Draft 并合并。
+独立诊断脚本 `scripts/start.mjs --probe` / `--stream-probe` 仍面向开发排障，**正常安装和使用不需要运行**。这些显式探针会发起一次指定免费模型请求；普通启动不会自动探测云端模型。
 
 ## 自动化测试
 
 ```bash
 npm test
 npm pack --dry-run --ignore-scripts
+# 开发验证，需要提前准备官方 CLI：
+OPENCODE_TEST_EXE=/path/to/opencode npm run test:structured
 ```
 
-GitHub Actions 运行 Windows / Ubuntu × Node.js 22 / 24 单元测试及真实 DSH 依赖集成测试，并在官方 OpenCode 1.19.3 Windows/Linux 二进制上搭配**本地模拟模型 API** 运行一次完整的原生 `read` → 守卫拒绝 → OpenCode 历史确认 → DSH `tool-call` 链路。不消耗在线免费模型调用；它比单纯模拟 HTTP 响应更接近实际执行，但**仍不等同于真实 Desktop + 免费模型网关验收**。
+结构化集成测试使用官方 OpenCode 1.19.3 和本地模拟模型，在 DSH 侧以测试程序模拟授权/执行，覆盖 `glob → read → edit`、拒绝编辑、取消等待和双会话隔离。CI 在 Windows/Linux 下安装已发布的 DSH 0.2.1-rc.2 包，以真实 `BlockAssembler` 和工具结果类型进一步核对协议。**这些通过不等于真实免费模型网关与 Desktop 审批界面已通过。**
 
-## 参考
+开发检查点：`docs/STRUCTURED_TOOL_HANDOFF.md`。
 
-- [OpenCode Server API](https://docs.opencode.ai/docs/server/)
-- [OpenCode 官方 CLI](https://docs.opencode.ai/docs/cli/)
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-- [DSH 插件适配接口](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/docs/user/develop/practice/llm-adapter.md)
-
-MIT License.
+参考：[OpenCode](https://github.com/anomalyco/opencode)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。MIT License。

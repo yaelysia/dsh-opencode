@@ -41,6 +41,9 @@ export class StructuredAdapterRuntime {
     if (event.kind === 'part' && previous?.kind === 'part' && previous.part.id === event.part.id) {
       turn.queue[turn.queue.length - 1] = event;
     } else turn.queue.push(event);
+    if (turn.queue.length > 4096) {
+      this.fail(turn, failure('Structured event queue exceeded its limit', 'STREAM_QUEUE_LIMIT')); return;
+    }
     turn.wake?.(); turn.wake = null;
   }
 
@@ -164,7 +167,14 @@ export class StructuredAdapterRuntime {
 
   async *streamOnce(options) {
     if (this.disposed) throw failure('Structured runtime is disposed', 'BRIDGE_CLOSED');
-    if (options.signal?.aborted) throw failure('Request cancelled', 'ABORTED');
+    if (options.signal?.aborted) {
+      const active = this.turns.get(this.key(options));
+      if (active) this.fail(active, failure('Request cancelled', 'ABORTED'));
+      throw failure('Request cancelled', 'ABORTED');
+    }
+    if (options.tools?.length && !options.sessionId) {
+      throw failure('Structured tools require an explicit DSH session ID', 'SESSION_ID_REQUIRED');
+    }
     if (options.tools?.length && this.config.toolBridgeEnabled === false) {
       throw failure('DSH tools are disabled', 'DSH_TOOLS_DISABLED');
     }
@@ -174,7 +184,10 @@ export class StructuredAdapterRuntime {
       if (!turn.waiting) throw failure('OpenCode is already generating for this session', 'CONCURRENT_STREAM');
       const result = [...(options.messages ?? [])].reverse()
         .find(m => m.role === 'tool' && resultId(m) === turn.waiting.id);
-      if (!result) throw failure('The pending DSH tool result is missing', 'TOOL_RESULT_REQUIRED');
+      if (!result) {
+        this.close(turn);
+        throw failure('The pending DSH tool result is missing', 'TOOL_RESULT_REQUIRED');
+      }
       this.bindSignal(turn, options.signal);
       if (turn.closed) throw turn.error;
       this.broker.update(turn.id, options.tools ?? [], instructions(options));
@@ -211,6 +224,7 @@ export class StructuredAdapterRuntime {
             continue;
           }
           turn.waiting = event.call;
+          this.arm(turn, this.handoffTimeoutMs, 'TOOL_RESULT_TIMEOUT');
           yield* blocks.end();
           const index = blocks.nextIndex;
           const call = event.call;

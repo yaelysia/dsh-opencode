@@ -1,7 +1,7 @@
 import Schema from '@deepseek-ai/schemastery';
 import { LlmAdapter, attributionHeaders } from '@deepseek-ai/dsh-llm';
-import { createAdapter, DEFAULT_MODELS } from './src/bridge.js';
-import { OpenCodeService } from './src/service.js';
+import { DEFAULT_MODELS } from './src/bridge.js';
+import { createPluginRuntime } from './src/runtime.js';
 import { BRIDGE_AGENT_ID } from './src/managed-agent.js';
 
 export const name = 'opencode-serve';
@@ -16,6 +16,7 @@ export const Config = Schema.object({
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD').volatile(),
   localTitles: Schema.boolean().default(true).volatile(),
   toolBridgeEnabled: Schema.boolean().default(true).volatile(),
+  structuredToolsEnabled: Schema.boolean().default(false).volatile(),
   guardedReadCompatibility: Schema.boolean().default(false).volatile(),
   // SSE is experimental until the user's actual OpenCode service is verified.
   ssePreviewEnabled: Schema.boolean().default(false).volatile(),
@@ -30,9 +31,9 @@ export const Config = Schema.object({
 });
 
 class ModelAdapter extends LlmAdapter {
-  constructor(config, logger) {
+  constructor(implementation) {
     super();
-    Object.assign(this, createAdapter({ ...config, logger, attributionHeaders: attributionHeaders() }));
+    Object.assign(this, implementation);
   }
 }
 
@@ -47,17 +48,10 @@ export function configSnapshot(config) {
 
 export function apply(ctx, config) {
   const options = configSnapshot(config);
-  const supervisor = new OpenCodeService(options, { logger: ctx.logger });
+  const runtime = createPluginRuntime({ ...options, logger: ctx.logger,
+    attributionHeaders: attributionHeaders() }, { logger: ctx.logger });
   const provider = options.providerId || 'opencode-serve';
-  ctx.llm.registerAdapter([provider], new ModelAdapter({
-    ...options,
-    passwordProvider: () => supervisor.passwordForClient(),
-    verifyNativeDenials: parts => supervisor.verifiedNativeDenials(parts),
-    ensureService: ({ requireManaged } = {}) => supervisor.ready({
-      requireManaged: options.strictOwnedServer !== false || requireManaged === true
-        || options.guardedReadCompatibility === true,
-    }),
-  }, ctx.logger));
+  ctx.llm.registerAdapter([provider], new ModelAdapter(runtime.adapter));
   ctx.llm.registerConfigurableProviders?.([{
     provider,
     displayName: 'OpenCode (official serve)',
@@ -66,9 +60,9 @@ export function apply(ctx, config) {
   }]);
   // Cordis owns the lifecycle: only stop a process spawned by this instance.
   ctx.effect(() => {
-    void supervisor.ready().catch(error => {
-      if (!supervisor.closed) ctx.logger.warn?.('dsh-opencode: OpenCode auto-start failed: ' + error.message);
+    void runtime.ready().catch(error => {
+      if (!runtime.supervisor.closed) ctx.logger.warn?.('dsh-opencode: OpenCode auto-start failed: ' + error.message);
     });
-    return () => supervisor.dispose();
+    return () => runtime.dispose();
   }, 'dsh-opencode: manage local OpenCode server');
 }
