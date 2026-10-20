@@ -146,3 +146,42 @@ test('healthy external server without DSH agent fails instead of using Plan mode
     assert.equal((await fetch(external.url + '/global/health')).ok, true);
   } finally { await external.close(); }
 });
+
+
+test('tool-authorized requests refuse to reuse an unmanaged OpenCode service', async () => {
+  const external = await externalServer(healthy);
+  try {
+    const manager = new OpenCodeService({ endpoint: external.url },
+      { spawnImpl: () => { throw Error('must not spawn'); }, logger: { info() {} } });
+    await assert.rejects(manager.ready({ requireManaged: true }),
+      error => error.code === 'UNTRUSTED_OPENCODE_SERVER');
+    assert.equal(manager.owned, null);
+    await manager.dispose();
+    assert.equal((await fetch(external.url + '/global/health')).ok, true);
+  } finally { await external.close(); }
+});
+
+test('owned OpenCode service is accepted for DSH tool-authorized requests', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-tool-server-'));
+  const fixture = path.join(root, 'fixture.mjs');
+  await writeFile(fixture, [
+    "import { createServer } from 'node:http';",
+    "createServer((req,res) => { res.setHeader('content-type','application/json');",
+    "res.end(JSON.stringify(req.url==='/agent'?[{name:'dsh-bridge'}]:{healthy:true,version:'test'})); })",
+    "  .listen(Number(process.argv[2]), '127.0.0.1');",
+  ].join('\n'));
+  const reservation = await externalServer(healthy);
+  const port = reservation.port;
+  await reservation.close();
+  const manager = new OpenCodeService({
+    endpoint: 'http://127.0.0.1:' + port,
+    runtimeRoot: root, opencodeExecutable: process.execPath,
+  }, { argsImpl: port => [fixture, String(port)], logger: { info() {} } });
+  try {
+    await manager.ready({ requireManaged: true });
+    assert.equal(manager.readyOwned, true);
+  } finally {
+    await manager.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
