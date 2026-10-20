@@ -105,6 +105,8 @@ test('DSH tool result is reintroduced as data in same OpenCode session', async (
     ] });
   assert.equal(second.dshToolCall, null);
   assert.equal(server.calls.filter(call => call.url.endsWith('/session')).length, 1);
+  assert.match(server.calls[2].body.parts[0].text, /assistant DSH tool request/);
+  assert.match(server.calls[2].body.parts[0].text, /read_file/);
   assert.match(server.calls[2].body.parts[0].text, /DSH tool result/);
   assert.match(server.calls[2].body.parts[0].text, /hello/);
 });

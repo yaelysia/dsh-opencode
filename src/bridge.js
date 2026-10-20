@@ -179,8 +179,13 @@ export class OpenCodeServeClient {
     if (session && (session.count >= messages.length
       || session.fingerprint !== fingerprint(messages.slice(0, session.count)))) session = null;
     const unseen = messages.slice(session?.count ?? 0);
-    const toSend = (session ? unseen.filter(message => message.role !== 'assistant') : messages)
-      .filter(message => message.role !== 'system');
+    // Native/DSH tool IDs are separate namespaces. Include the DSH
+    // assistant's structured call summary with its result, even in a reused
+    // OpenCode session, so a result is never just an unexplained callId.
+    const toSend = (session
+      ? unseen.filter(message => message.role !== 'assistant'
+        || message.content?.some?.(part => part?.type === 'tool-call'))
+      : messages).filter(message => message.role !== 'system');
     const prompt = renderMessages(toSend);
     if (!prompt.trim()) throw failure('No text message to send to OpenCode', 'INVALID_REQUEST');
     const system = [options?.system,

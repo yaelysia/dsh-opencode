@@ -75,6 +75,8 @@ test('real DSH BlockAssembler accepts the tool request and subsequent result', a
   assert.equal(second.message({ provider: providers, model }).content[0].text,
     'The requested tool returned a result.');
   assert.equal(requests.length, 3, 'same session reused, not recreated');
+  assert.match(requests[2].body.parts[0].text, /assistant DSH tool request/);
+  assert.match(requests[2].body.parts[0].text, /read_file/);
   assert.match(requests[2].body.parts[0].text, /HELLO/);
   assert.match(requests[2].body.parts[0].text, new RegExp(callId));
 });
