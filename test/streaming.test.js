@@ -113,7 +113,7 @@ test('text deltas arrive before the authoritative /message response', { timeout:
       partID, field: 'text', delta: 'lo' });
     send('message.part.updated', { sessionID, part: textPart('Hello') });
   } });
-  const iterator = await start(createAdapter({}, upstream.fetch));
+  const iterator = await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch));
   const started = await iterator.next();
   const first = await iterator.next();
   const second = await iterator.next();
@@ -138,7 +138,7 @@ test('SSE event wrapper and text snapshots produce one consistent completion', a
       send('message.part.updated', { sessionID, part: textPart('你好世界') });
     },
   });
-  const iterator = await start(createAdapter({}, upstream.fetch));
+  const iterator = await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch));
   const chunksPromise = consume(iterator);
   await upstream.posted;
   await sleep(20);
@@ -150,7 +150,7 @@ test('SSE event wrapper and text snapshots produce one consistent completion', a
 
 test('no SSE support falls back to the complete reply without fabricating chunks', async () => {
   const upstream = fixture({ mode: 'unavailable', responseText: 'Fallback' });
-  const chunksPromise = consume(await start(createAdapter({ logger: { warn() {} } }, upstream.fetch)));
+  const chunksPromise = consume(await start(createAdapter({ ssePreviewEnabled: true, logger: { warn() {} } }, upstream.fetch)));
   await upstream.posted;
   upstream.finish();
   const chunks = await chunksPromise;
@@ -163,7 +163,7 @@ test('no SSE text events falls back to authoritative response', async () => {
   const upstream = fixture({ responseText: 'Only final' });
   const warnings = [];
   const chunksPromise = consume(await start(createAdapter({
-    logger: { warn: message => warnings.push(message) },
+    ssePreviewEnabled: true, logger: { warn: message => warnings.push(message) },
   }, upstream.fetch)));
   await upstream.posted;
   upstream.finish();
@@ -180,7 +180,7 @@ test('tool envelope is never leaked as text and is emitted only after final vali
     send('message.part.delta', { sessionID, messageID: assistantID,
       partID, field: 'text', delta: payload.slice(4) });
   } });
-  const iterator = await start(createAdapter({}, upstream.fetch), { tools });
+  const iterator = await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch), { tools });
   const received = [];
   const job = (async () => {
     for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) received.push(chunk);
@@ -203,7 +203,7 @@ test('partial tool marker completed as normal language is released as text', asy
     send('message.part.delta', { sessionID, messageID: assistantID,
       partID, field: 'text', delta: 'SH is the host.' });
   } });
-  const promise = consume(await start(createAdapter({}, upstream.fetch), { tools }));
+  const promise = consume(await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch), { tools }));
   await upstream.posted;
   upstream.finish();
   const chunks = await promise;
@@ -223,7 +223,7 @@ test('foreign sessions and user message echoes never reach the DSH text stream',
     send('message.part.delta', { sessionID, messageID: assistantID,
       partID, field: 'text', delta: 'SAFE' });
   } });
-  const promise = consume(await start(createAdapter({}, upstream.fetch)));
+  const promise = consume(await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch)));
   await upstream.posted;
   upstream.finish();
   const chunks = await promise;
@@ -235,7 +235,7 @@ test('stream mismatch is a failure, not a silently stitched answer', async () =>
     send('message.part.updated', { sessionID, part: textPart('stale') });
   } });
   const p = assert.rejects(async () => {
-    await consume(await start(createAdapter({}, upstream.fetch)));
+    await consume(await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch)));
   }, e => e.code === 'STREAM_MISMATCH');
   await upstream.posted;
   await sleep(20);
@@ -251,7 +251,7 @@ test('OpenCode native tool events observed via SSE fail closed even if omitted b
     } });
   } });
   const p = assert.rejects(async () => {
-    await consume(await start(createAdapter({}, upstream.fetch), { tools }));
+    await consume(await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch), { tools }));
   }, e => e.code === 'OPENCODE_TOOL_BOUNDARY');
   await upstream.posted;
   await sleep(20);
@@ -266,7 +266,7 @@ test('cancelling a partial tool JSON never yields an executable call', { timeout
   } });
   const controller = new AbortController();
   const output = [];
-  const iterator = await start(createAdapter({}, upstream.fetch),
+  const iterator = await start(createAdapter({ ssePreviewEnabled: true }, upstream.fetch),
     { tools, signal: controller.signal });
   const task = (async () => {
     for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) output.push(chunk);
@@ -276,4 +276,32 @@ test('cancelling a partial tool JSON never yields an executable call', { timeout
   controller.abort();
   await assert.rejects(task, error => error.code === 'ABORTED');
   assert.deepEqual(output, [], 'no text, tool-call or finish for an interrupted JSON envelope');
+});
+
+test('legacy enabled SSE setting cannot silently re-enable an unverified streaming path', async () => {
+  const upstream = fixture({ mode: 'unavailable', responseText: 'Stable path' });
+  const iterator = await start(createAdapter({ streamingEnabled: true }, upstream.fetch));
+  const job = consume(iterator);
+  await upstream.posted;
+  upstream.finish();
+  const chunks = await job;
+  assert.deepEqual(upstream.paths, [
+    '/session', '/session/' + sessionID + '/message',
+  ], 'old persisted streamingEnabled=true must not initiate SSE on alpha.3');
+  assert.equal(chunks.find(c => c.type === 'text-delta')?.text, 'Stable path');
+});
+
+test('upstream CLIENT_RESTRICTED is reported even without an SSE request', async () => {
+  const paths = [];
+  const adapter = createAdapter({}, async url => {
+    paths.push(new URL(url).pathname);
+    if (url.endsWith('/session')) return Response.json({ id: 'sse-off' });
+    return Response.json({ info: { error: { name: 'APIError', data: {
+      statusCode: 403,
+      message: "OpenCode's free tier can only be used from within OpenCode.",
+    } } }, parts: [] });
+  });
+  await assert.rejects(async () => consume(await start(adapter)),
+    error => error.code === 'CLIENT_RESTRICTED');
+  assert.deepEqual(paths, ['/session', '/session/sse-off/message']);
 });

@@ -56,7 +56,8 @@ export class OpenCodeServeClient {
     this.logger = config.logger;
     this.ensureService = config.ensureService;
     this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
-    this.streamingEnabled = config.streamingEnabled !== false;
+    // Explicit opt-in: ignore prior persisted streamingEnabled=true defaults.
+    this.streamingEnabled = config.ssePreviewEnabled === true;
     this.sessions = new Map();
     this.pending = Promise.resolve();
     this.blocked = null;

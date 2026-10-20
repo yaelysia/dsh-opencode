@@ -113,7 +113,7 @@ test('real DSH BlockAssembler accepts SSE deltas before the OpenCode reply settl
     }
     throw Error('Unexpected request ' + url);
   };
-  const adapter = createAdapter({}, mock);
+  const adapter = createAdapter({ ssePreviewEnabled: true }, mock);
   const prepared = await adapter.prepareCall('opencode-serve', model);
   const assembler = new BlockAssembler();
   const observed = [];

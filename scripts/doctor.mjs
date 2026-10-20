@@ -16,7 +16,8 @@ export async function diagnose(options = {}, fetchImpl) {
     proxyVariablesPresent: proxySummary(options.env), probe: { requested: Boolean(options.probe || options.streamProbe), attempted: false },
   };
   try {
-    const client = new OpenCodeServeClient({ ...options, timeoutMs: 10_000 }, fetchImpl);
+    const client = new OpenCodeServeClient({ ...options, ssePreviewEnabled: options.streamProbe === true,
+      timeoutMs: 10_000 }, fetchImpl);
     report.endpoint = client.origin;
     const health = await client.request('/global/health', undefined, undefined, 'GET');
     report.health = { healthy: health?.healthy === true, version: redact(health?.version ?? 'unknown') };

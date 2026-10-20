@@ -16,7 +16,8 @@ export const Config = Schema.object({
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
   localTitles: Schema.boolean().default(true),
   toolBridgeEnabled: Schema.boolean().default(true),
-  streamingEnabled: Schema.boolean().default(true),
+  // SSE is experimental until the user's actual OpenCode service is verified.
+  ssePreviewEnabled: Schema.boolean().default(false),
   strictOwnedServer: Schema.boolean().default(true),
   autoStart: Schema.boolean().default(true),
   autoStartDirect: Schema.boolean().default(true),

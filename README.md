@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.2`（实验性流式输出）。** 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.3`（流式预览可选）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -23,7 +23,7 @@ DSH Agent
 ### 已实现
 
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
-- **增量文本输出**：在同步 `/message` 请求期间订阅 `/event` SSE，收到属于当前 assistant 消息的文本变化即发送 DSH `text-delta`；以最终 `/message` 响应核对并补齐缺失后缀。
+- **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
 - 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
 - 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
@@ -76,7 +76,7 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 | `runtimeRoot` | 自动计算 | 独立工作目录与运行数据 |
 | `strictOwnedServer` | `true` | 默认拒绝未托管服务；带 DSH 工具的请求总是要求托管服务 |
 | `toolBridgeEnabled` | `true` | 文本工具协议；关闭后收到 DSH 工具会明确报错 |
-| `streamingEnabled` | `true` | 尝试 SSE 真正增量文本输出；设为 `false` 可停用 SSE 并使用同步完整回复 |
+| `ssePreviewEnabled` | `false` | SSE 增量输出预览；仅手动设置 `true` 才会开启。旧版保存的 `streamingEnabled=true` 不再生效，避免自动启用未经验证的流式路径 |
 | `localTitles` | `true` | 标题不调用云端模型 |
 | `timeoutMs` | `120000` | 本机模型请求超时（毫秒） |
 | `passwordEnv` | `OPENCODE_SERVER_PASSWORD` | 连接外部手动服务时的环境变量键；托管服务始终生成新的随机密码 |
@@ -123,14 +123,15 @@ node .\scripts\doctor.mjs --stream-probe
 | `INVALID_TOOL_CALL` / `UNDECLARED_TOOL_CALL` | 模型未按协议输出，或请求了 DSH 未声明的工具 |
 | `OPENCODE_TOOL_BOUNDARY` | 返回了 OpenCode 原生工具事件，插件拒绝该响应 |
 | `SSE_NO_DELTAS` | 显式流式探针没有收到任何助手文本事件；检查 OpenCode 版本与其 SSE 发布情况 |
+| `CLIENT_RESTRICTED` | 上游明确拒绝该免费模型请求；可能由服务端免费模型策略、版本或工具权限配置触发。关闭 SSE 不保证解决；不能为了让请求通过而开放 OpenCode 原生工具权限 |
 
-网络或客户端拒绝后，当前插件实例短时冷却以避免重复请求；冷却不代表网络封禁会自行解除。
+网络或客户端拒绝后，当前插件实例短时冷却以避免重复请求；冷却不代表限制会自行解除。OpenCode 官方 #51241、#56324 等报告表明：严格禁止内置工具或直接使用官方客户端，也可能遇到相同的 `CLIENT_RESTRICTED` 错误。遇到此错应先在官方 OpenCode 客户端验证对应免费模型是否正常，再检查插件适配性，而不是尝试绕过客户端授权限制。
 
 ## 真实 DSH Desktop 验收
 
 本 PR 合并前需要完成以下验证：
 
-1. 新会话要求生成较长文字，观察是否在最终响应完成前持续显示文本。若只在完成后一次性显示，记录 OpenCode 版本和 SSE 事件情况，先排查上游 SSE。
+1. **先保持默认 `ssePreviewEnabled=false`**，重新启动 DSH，在新会话发一个普通文本请求，确认同步旧路径是否仍可用。再手动开启 SSE 预览并重启 DSH，观察长文本是否在最终响应前持续出现。如果只有完整回复，则运行 `--stream-probe` 检查 OpenCode 的实际 SSE 事件。
 2. 不带工具的普通文本问答，确认没有 OpenCode Plan/Build 角色干扰。
 3. 使用 DSH 的**只读**文件工具读取测试文件，在 Trajectory 中确认执行者是 **DSH 工具运行时**。
 4. 手动拒绝一次工具授权，确认未发生 OpenCode 内部执行或文件修改。
