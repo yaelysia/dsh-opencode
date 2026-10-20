@@ -348,7 +348,7 @@ test('a forged or successful SSE-only native tool event is never dismissed', asy
   } });
   const pending = assert.rejects(async () => consume(await start(createAdapter({
     guardedReadCompatibility: true, ssePreviewEnabled: true,
-  }, upstream.fetch)), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  }, upstream.fetch))), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
   await upstream.posted;
   await sleep(25);
   upstream.finish();
