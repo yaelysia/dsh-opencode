@@ -14,11 +14,12 @@ test('dedicated agent has minimal system prompt without Plan persona', () => {
   assert.equal(agent.prompt, BRIDGE_PROMPT);
   assert.doesNotMatch(agent.prompt, /You are OpenCode|currently in Plan mode|switch to Build/i);
   assert.equal(agent.permission['*'], 'deny');
-  assert.equal(agent.permission.read, 'allow');
-  assert.equal(agent.permission.external_directory, 'deny');
+  assert.equal(agent.permission.read, undefined);
+  assert.equal(agent.permission.edit, undefined);
+  assert.deepEqual(agent.permission, { '*': 'deny' });
 });
 
-test('isolates new agent config to child environment and preserves existing settings', () => {
+test('isolates all OpenCode plugins and other agents from the DSH subprocess', () => {
   const parent = {
     HTTP_PROXY: 'http://proxy',
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
@@ -26,10 +27,14 @@ test('isolates new agent config to child environment and preserves existing sett
       agent: { reviewer: { mode: 'subagent', prompt: 'Review code' } },
     }),
   };
-  const child = managedAgentEnvironment(parent);
+  const child = managedAgentEnvironment(parent, BRIDGE_AGENT_ID, '/runtime');
   const cfg = JSON.parse(child.OPENCODE_CONFIG_CONTENT);
-  assert.equal(cfg.theme, 'light');
-  assert.equal(cfg.agent.reviewer.prompt, 'Review code');
+  assert.equal(cfg.theme, undefined);
+  assert.equal(cfg.agent.reviewer, undefined);
+  assert.deepEqual(cfg.plugin, []);
+  assert.deepEqual(cfg.mcp, {});
+  assert.equal(child.XDG_CONFIG_HOME.endsWith('dsh-isolated-config'), true);
+  assert.equal(child.OPENCODE_DISABLE_PROJECT_CONFIG, '1');
   assert.equal(cfg.agent['dsh-bridge'].prompt, BRIDGE_PROMPT);
   assert.equal(parent.OPENCODE_CONFIG_CONTENT.includes('dsh-bridge'), false);
   assert.equal(child.HTTP_PROXY, parent.HTTP_PROXY);
