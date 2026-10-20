@@ -1,0 +1,43 @@
+name: structured-plugin-poc
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  structured-plugin-poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch pinned official OpenCode (no cloud model requests)
+        run: |
+          curl -fL --retry 2 https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-linux-x64.tar.gz -o /tmp/opencode.tar.gz
+          mkdir -p /tmp/opencode-bin
+          tar -xzf /tmp/opencode.tar.gz -C /tmp/opencode-bin
+          exe="$(find /tmp/opencode-bin -type f -name opencode -print -quit)"
+          test -n "$exe"
+          chmod +x "$exe"
+          echo "OPENCODE_TEST_EXE=$exe" >> "$GITHUB_ENV"
+      - name: Structured plugin integration (when present)
+        run: |
+          if test -f integration/structured-plugin-poc.mjs; then
+            node --test integration/structured-plugin-poc.mjs
+          fi
+      - name: Package reproducible offline harness
+        if: always()
+        run: |
+          mkdir -p /tmp/dsh-poc-harness/source /tmp/dsh-poc-harness/bin
+          git archive HEAD | tar -xf - -C /tmp/dsh-poc-harness/source
+          if test -n "$OPENCODE_TEST_EXE"; then cp "$OPENCODE_TEST_EXE" /tmp/dsh-poc-harness/bin/opencode; fi
+          git rev-parse HEAD > /tmp/dsh-poc-harness/SOURCE_SHA
+          tar -czf /tmp/dsh-poc-harness.tar.gz -C /tmp/dsh-poc-harness .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: structured-plugin-offline-harness
+          path: /tmp/dsh-poc-harness.tar.gz
+          retention-days: 2
