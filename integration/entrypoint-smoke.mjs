@@ -169,3 +169,78 @@ test('settings schema refuses invalid model and startup timeout values before pe
   assert.throws(() => Config({ timeoutMs: -1 }));
   assert.throws(() => Config({ autoStartTimeoutMs: 0 }));
 });
+
+test('published DSH BlockAssembler accepts a guarded OpenCode write as a DSH write', async () => {
+  const model = 'deepseek-v4.1-flash-free', provider = 'opencode-serve';
+  const tools = [{ name: 'write', description: 'DSH-authorized file writing',
+    parameters: { type: 'object',
+      properties: { file_path: { type: 'string' }, content: { type: 'string' } },
+      required: ['file_path', 'content'],
+    },
+  }];
+  let generation = 0;
+  const server = async (url) => {
+    if (url.endsWith('/session')) return Response.json({ id: 'guarded-dsh' });
+    generation++;
+    return Response.json({ info: { modelID: model }, parts: generation === 1 ? [
+      { type: 'tool', tool: 'write', id: 'native-write', callID: 'local-native',
+        state: { status: 'error', input: { filePath: 'text.txt', content: 'ok' },
+          error: 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED' } },
+    ] : [{ type: 'text', text: 'DSH finished the write.' }] });
+  };
+  const adapter = createAdapter({ guardedReadCompatibility: true }, server);
+  const prepared = await adapter.prepareCall(provider, model);
+  const user = { role: 'user', content: [{ type: 'text', text: 'Create text.txt with ok' }] };
+  const first = new BlockAssembler();
+  for await (const chunk of prepared.stream({ provider, model, tools, messages: [user],
+    sessionId: 'guarded-integration' })) first.push(chunk);
+  const assistant = first.message({ provider, model });
+  assert.equal(first.finish.kind, 'tool-calls');
+  assert.equal(assistant.content[0].type, 'tool-call');
+  assert.equal(assistant.content[0].name, 'write');
+  assert.deepEqual(JSON.parse(assistant.content[0].arguments),
+    { file_path: 'text.txt', content: 'ok' });
+  const hostResult = createToolResultMessage({ callId: assistant.content[0].id,
+    isError: false, content: [{ type: 'text', text: 'Created file text.txt' }] });
+  const next = new BlockAssembler();
+  for await (const chunk of prepared.stream({ provider, model, tools,
+    messages: [user, assistant, hostResult], sessionId: 'guarded-integration' })) next.push(chunk);
+  assert.equal(next.finish.kind, 'stop');
+  assert.equal(next.message({ provider, model }).content[0].text, 'DSH finished the write.');
+  assert.equal(generation, 2, 'the adapter must never execute the native write itself');
+});
+
+test('published DSH BlockAssembler prefers authoritative block-end after a divergent SSE preview', { timeout: 6000 }, async () => {
+  const model = 'deepseek-v4.1-flash-free', provider = 'opencode-serve';
+  const sessionID = 'final-authoritative';
+  const encoder = new TextEncoder();
+  let controller;
+  const emit = (type, properties = {}) =>
+    controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type, properties }) + '\n\n'));
+  const server = async url => {
+    if (url.endsWith('/session')) return Response.json({ id: sessionID });
+    if (url.endsWith('/event')) return new Response(new ReadableStream({
+      start(ctl) { controller = ctl; emit('server.connected'); },
+    }), { headers: { 'content-type': 'text/event-stream' } });
+    if (url.endsWith('/message')) {
+      emit('message.updated', { sessionID, info: { role: 'assistant', id: 'stream-assistant', sessionID } });
+      emit('message.part.delta', { sessionID, messageID: 'stream-assistant',
+        partID: 'stream-part', field: 'text', delta: 'Preview draft' });
+      await sleep(30);
+      return Response.json({ info: { modelID: model },
+        parts: [{ type: 'text', text: 'Authoritative text' }] });
+    }
+    throw Error('Unexpected endpoint ' + url);
+  };
+  const adapter = createAdapter({ ssePreviewEnabled: true, logger: { warn() {} } }, server);
+  const prepared = await adapter.prepareCall(provider, model);
+  const assembled = new BlockAssembler(), recorded = [];
+  for await (const chunk of prepared.stream({
+    provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'Answer' }] }],
+  })) {
+    assembled.push(chunk); recorded.push(chunk);
+  }
+  assert.equal(recorded.find(x => x.type === 'text-delta')?.text, 'Preview draft');
+  assert.equal(assembled.message({ provider, model }).content[0].text, 'Authoritative text');
+  assert.equal(assembled.finish.kind, 'stop');
+});
