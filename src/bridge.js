@@ -46,6 +46,7 @@ export class OpenCodeServeClient {
     this.backendProviderId = config.backendProviderId || 'opencode';
     this.agent = config.agent || BRIDGE_AGENT_ID;
     this.passwordEnv = config.passwordEnv || 'OPENCODE_SERVER_PASSWORD';
+    this.passwordProvider = config.passwordProvider;
     this.username = config.username || process.env.OPENCODE_SERVER_USERNAME || 'opencode';
     this.timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0
       ? Math.min(2147483647, Math.max(1, Math.floor(config.timeoutMs))) : 120_000;
@@ -61,7 +62,7 @@ export class OpenCodeServeClient {
 
   headers() {
     const headers = { ...this.attributionHeaders, 'content-type': 'application/json', accept: 'application/json' };
-    const password = process.env[this.passwordEnv];
+    const password = this.passwordProvider?.() || process.env[this.passwordEnv];
     if (password) headers.authorization = 'Basic ' + Buffer.from(this.username + ':' + password).toString('base64');
     return headers;
   }
