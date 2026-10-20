@@ -60,6 +60,7 @@ export class OpenCodeServeClient {
     this.sessions = new Map();
     this.pending = Promise.resolve();
     this.blocked = null;
+    this.sseNoDeltaWarned = false;
   }
 
   headers() {
@@ -195,6 +196,11 @@ export class OpenCodeServeClient {
         }
       }
       const response = await this.request('/session/' + encodeURIComponent(session.id) + '/message', payload, options?.signal);
+      if (collector && !collector.text && !this.sseNoDeltaWarned) {
+        this.sseNoDeltaWarned = true;
+        this.logger?.warn?.('dsh-opencode: SSE connected but delivered no assistant text; ' +
+          'this OpenCode server may not publish incremental events. Using final response.');
+      }
       if (collector?.nativeToolSeen) {
         throw failure('OpenCode emitted an internal tool event', 'OPENCODE_TOOL_BOUNDARY');
       }

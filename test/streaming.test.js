@@ -54,11 +54,12 @@ function fixture({ responseText = 'Hello world', plan = () => {}, mode = 'events
         send('message.updated', { sessionID, info: assistant });
         plan({ send, sessionID, assistantID, partID, textPart });
       }
-      const reply = new Promise(resolve => {
+      const reply = new Promise((resolve, reject) => {
         finishReply = () => resolve(Response.json({
           info: { modelID: model, finish: 'stop', tokens: { input: 7, output: 3 } },
           parts: [{ type: 'text', text: responseText }],
         }));
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       });
       notifyPosted();
       return reply;
@@ -160,11 +161,15 @@ test('no SSE support falls back to the complete reply without fabricating chunks
 
 test('no SSE text events falls back to authoritative response', async () => {
   const upstream = fixture({ responseText: 'Only final' });
-  const chunksPromise = consume(await start(createAdapter({}, upstream.fetch)));
+  const warnings = [];
+  const chunksPromise = consume(await start(createAdapter({
+    logger: { warn: message => warnings.push(message) },
+  }, upstream.fetch)));
   await upstream.posted;
   upstream.finish();
   const chunks = await chunksPromise;
   assert.deepEqual(chunks.filter(c => c.type === 'text-delta').map(c => c.text), ['Only final']);
+  assert.ok(warnings.some(message => message.includes('no assistant text')));
 });
 
 test('tool envelope is never leaked as text and is emitted only after final validation', { timeout: 5000 }, async () => {
@@ -252,4 +257,23 @@ test('OpenCode native tool events observed via SSE fail closed even if omitted b
   await sleep(20);
   upstream.finish();
   await p;
+});
+
+test('cancelling a partial tool JSON never yields an executable call', { timeout: 5000 }, async () => {
+  const upstream = fixture({ responseText: 'unused', plan({ send }) {
+    send('message.part.delta', { sessionID, messageID: assistantID,
+      partID, field: 'text', delta: 'DSH_TOOL_CALL_V1:{"name":"read_file"' });
+  } });
+  const controller = new AbortController();
+  const output = [];
+  const iterator = await start(createAdapter({}, upstream.fetch),
+    { tools, signal: controller.signal });
+  const task = (async () => {
+    for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) output.push(chunk);
+  })();
+  await upstream.posted;
+  await sleep(25);
+  controller.abort();
+  await assert.rejects(task, error => error.code === 'ABORTED');
+  assert.deepEqual(output, [], 'no text, tool-call or finish for an interrupted JSON envelope');
 });

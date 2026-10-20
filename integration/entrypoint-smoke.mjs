@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { LlmAdapter, BlockAssembler, createToolResultMessage } from '@deepseek-ai/dsh-llm';
 import { apply, Config, name } from '../index.js';
 import { createAdapter } from '../src/bridge.js';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 test('real DSH packages load the plugin, register its adapter, and run a local title', async () => {
   assert.equal(name, 'opencode-serve');
@@ -76,4 +77,65 @@ test('real DSH BlockAssembler accepts the tool request and subsequent result', a
   assert.equal(requests.length, 3, 'same session reused, not recreated');
   assert.match(requests[2].body.parts[0].text, /HELLO/);
   assert.match(requests[2].body.parts[0].text, new RegExp(callId));
+});
+
+test('real DSH BlockAssembler accepts SSE deltas before the OpenCode reply settles', { timeout: 5000 }, async () => {
+  const model = 'deepseek-v4.1-flash-free';
+  const encoder = new TextEncoder();
+  let controller, completeReply;
+  const sessionID = 'sse-assembly';
+  const emit = (type, properties = {}) => controller.enqueue(encoder.encode(
+    'data: ' + JSON.stringify({ type, properties }) + '\n\n'));
+  const mock = async (url, init) => {
+    if (url.endsWith('/session')) return Response.json({ id: sessionID });
+    if (url.endsWith('/event')) {
+      return new Response(new ReadableStream({
+        start(value) {
+          controller = value;
+          emit('server.connected');
+        },
+      }), { headers: { 'content-type': 'text/event-stream' } });
+    }
+    if (url.endsWith('/message')) {
+      emit('message.updated', {
+        sessionID, info: { id: 'assistant-1', role: 'assistant', sessionID },
+      });
+      emit('message.part.delta', {
+        sessionID, messageID: 'assistant-1', partID: 'part-1',
+        field: 'text', delta: 'Before ',
+      });
+      return new Promise(resolve => {
+        completeReply = () => resolve(Response.json({
+          info: { modelID: model },
+          parts: [{ type: 'text', text: 'Before completion' }],
+        }));
+      });
+    }
+    throw Error('Unexpected request ' + url);
+  };
+  const adapter = createAdapter({}, mock);
+  const prepared = await adapter.prepareCall('opencode-serve', model);
+  const assembler = new BlockAssembler();
+  const observed = [];
+  const run = (async () => {
+    for await (const chunk of prepared.stream({
+      provider: 'opencode-serve', model, sessionId: 'sse-assembly',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Write two words' }] }],
+    })) {
+      assembler.push(chunk);
+      observed.push(chunk);
+    }
+  })();
+  for (let i = 0; i < 60 && !observed.some(x => x.type === 'text-delta'); i++) {
+    await sleep(5);
+  }
+  assert.equal(observed.find(x => x.type === 'text-delta')?.text, 'Before ');
+  assert.equal(observed.some(x => x.type === 'finish'), false,
+    'the real DSH assembler must see the delta before completion');
+  assert.equal(typeof completeReply, 'function');
+  completeReply();
+  await run;
+  assert.equal(assembler.finish.kind, 'stop');
+  assert.equal(assembler.message({ provider: 'opencode-serve', model }).content[0].text,
+    'Before completion');
 });
