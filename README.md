@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.8`（SSE 工具终态回查修复）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.9`（原生守卫证明与中文工作区指令修复）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -25,7 +25,9 @@ DSH Agent
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
 - **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
-- **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。\n- **SSE 工具终态回查**：SSE 先发 `pending/running`，不代表工具已执行，也不代表最终失败；OpenCode 的 `/message` 还可能只返回最终 assistant 步骤，遗漏前面经守卫拒绝的工具。遇到无法从最终响应确认的工具事件时，桥接器使用官方只读 `GET /session/:id/message?limit=80` 查询终态，按工具 part ID 与 assistant message ID 验证，最多有限重查两次。仅在最终状态明确为本地守卫拒绝时才转成 DSH tool-call；缺失、未完成或已执行迹象仍拒绝。
+- **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。\n- **被拦截工具证明**：受保护兼容模式的 OpenCode 子进程会在 `tool.execute.before` 拒绝原生工具前，追加只含随机启动证明、Session ID、调用 ID 和工具名的本地审计记录。即使 OpenCode 将异常包装成通用错误，桥接也仅在核实该拒绝记录、工具最终状态为 `error` 且不存在执行证据后，才能将其转交 DSH；没有证明仍拒绝。审计不存储工具参数或文件内容，退出时清理。
+- **中文规则**：DSH 的 `agent-instructions` 工作区消息（如 `AGENTS.md`）明确进入上游 system 输入中的低于 system/developer 的用户指令段，不再仅淹没在扁平化的历史文本内。
+- **SSE 工具终态回查**：SSE 先发 `pending/running`，不代表工具已执行，也不代表最终失败；OpenCode 的 `/message` 还可能只返回最终 assistant 步骤，遗漏前面经守卫拒绝的工具。遇到无法从最终响应确认的工具事件时，桥接器使用官方只读 `GET /session/:id/message?limit=80` 查询终态，按工具 part ID 与 assistant message ID 验证，最多有限重查两次。仅在最终状态明确为本地守卫拒绝时才转成 DSH tool-call；缺失、未完成或已执行迹象仍拒绝。
 - **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
 - **SSE 最终纠正**：`/event` 增量是预览，完整 `/message` 响应才是最终文本。当两者不一致时由 DSH `block-end` 纠正内容，不会在成功生成后抛出 `STREAM_MISMATCH`。诊断只记录字符数，不记录正文。
 - 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
