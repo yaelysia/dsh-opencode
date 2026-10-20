@@ -397,13 +397,128 @@ test('SSE guards native tool intent across multiple assistant message IDs in one
   const dshTools = [{ name: 'read', description: 'Read via DSH',
     parameters: { type: 'object',
       properties: { file_path: { type: 'string' } }, required: ['file_path'] } }];
+  const history = guardedHistory(upstream, [later]);
   const task = consume(await start(createAdapter({
     guardedReadCompatibility: true, ssePreviewEnabled: true,
-  }, upstream.fetch), { tools: dshTools }));
+  }, history.fetch), { tools: dshTools }));
   await upstream.posted;
   await sleep(25);
   upstream.finish();
   const chunks = await task;
+  assert.equal(history.reads, 1);
   assert.equal(chunks.find(chunk => chunk.type === 'tool-call-delta')?.name, 'read');
   assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
+});
+
+function guardedHistory(upstream, parts) {
+  let historyReads = 0;
+  return {
+    fetch: async (url, options) => {
+      if (options?.method === 'GET' && new URL(url).pathname.endsWith('/message')) {
+        historyReads++;
+        const current = typeof parts === 'function' ? parts(historyReads) : parts;
+        return Response.json([{ info: {
+          id: current[0]?.messageID ?? assistantID, role: 'assistant', sessionID,
+        }, parts: current }]);
+      }
+      return upstream.fetch(url, options);
+    },
+    get reads() { return historyReads; },
+  };
+}
+
+test('SSE pending native tool is reconciled from authoritative OpenCode history', async () => {
+  const pending = {
+    type: 'tool', id: 'native-cursor', sessionID, messageID: assistantID,
+    callID: 'native-1', tool: 'glob',
+    state: { status: 'pending', input: { pattern: '*.txt' }, raw: '' },
+  };
+  const settled = { ...pending, state: {
+    status: 'error', input: { pattern: '*.txt' },
+    error: 'Error: DSH_OPENCODE_NATIVE_TOOL_BLOCKED',
+  } };
+  const upstream = fixture({ responseText: 'Looking for text files', plan({ send }) {
+    send('message.part.updated', { sessionID, part: pending });
+  } });
+  const history = guardedHistory(upstream, [settled]);
+  const dshTools = [{ name: 'glob', description: 'Workspace file discovery',
+    parameters: { type: 'object', properties: { pattern: { type: 'string' } },
+      required: ['pattern'] } }];
+  const job = consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, history.fetch), { tools: dshTools }));
+  await upstream.posted;
+  upstream.finish();
+  const chunks = await job;
+  assert.equal(history.reads, 1, 'one read-only verification, no extra model call');
+  assert.equal(chunks.find(c => c.type === 'tool-call-delta')?.name, 'glob');
+  assert.deepEqual(JSON.parse(chunks.find(c => c.type === 'tool-call-delta').argumentsDelta),
+    { pattern: '*.txt' });
+  assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
+});
+
+test('OpenCode native tool must have a terminal guard denial in authoritative history', async () => {
+  const pending = {
+    type: 'tool', id: 'native-pending', sessionID, messageID: assistantID,
+    callID: 'native-1', tool: 'read',
+    state: { status: 'running', input: { filePath: 'test.txt' } },
+  };
+  const upstream = fixture({ responseText: 'Checking workspace', plan({ send }) {
+    send('message.part.updated', { sessionID, part: pending });
+  } });
+  const history = guardedHistory(upstream, [pending]);
+  const tool = [{ name: 'read', description: 'Read file through DSH',
+    parameters: { type: 'object', properties: { file_path: { type: 'string' } },
+      required: ['file_path'] } }];
+  const call = assert.rejects(async () => consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, history.fetch), { tools: tool })), error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  await upstream.posted;
+  upstream.finish();
+  await call;
+  assert.equal(history.reads, 3, 'bounded terminal-state verification retries');
+});
+
+test('history contains a provider-executed tool: never forward the guarded SSE intent', async () => {
+  const pending = {
+    type: 'tool', id: 'native-pending', sessionID, messageID: assistantID,
+    callID: 'native-1', tool: 'read',
+    state: { status: 'pending', input: { filePath: 'test.txt' } },
+  };
+  const completed = { ...pending, metadata: { providerExecuted: true },
+    state: { status: 'completed', input: { filePath: 'test.txt' }, output: 'file contents' } };
+  const upstream = fixture({ responseText: 'Looks fine', plan({ send }) {
+    send('message.part.updated', { sessionID, part: pending });
+  } });
+  const history = guardedHistory(upstream, [completed]);
+  const job = assert.rejects(async () => consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, history.fetch)), error => error.code === 'OPENCODE_TOOL_BOUNDARY');
+  await upstream.posted;
+  upstream.finish();
+  await job;
+  assert.equal(history.reads, 1);
+});
+
+test('mismatched or missing authoritative native tool identity fails closed', async () => {
+  const pending = {
+    type: 'tool', id: 'native-sse-only', sessionID, messageID: assistantID,
+    callID: 'native-1', tool: 'glob',
+    state: { status: 'pending', input: { pattern: '*' } },
+  };
+  const upstream = fixture({ responseText: 'Looking', plan({ send }) {
+    send('message.part.updated', { sessionID, part: pending });
+  } });
+  const history = guardedHistory(upstream, [{
+    ...pending, id: 'different-native-call',
+    state: { status: 'error', input: { pattern: '*' },
+      error: 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED' },
+  }]);
+  const job = assert.rejects(async () => consume(await start(createAdapter({
+    guardedReadCompatibility: true, ssePreviewEnabled: true,
+  }, history.fetch)), error => error.code === 'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+  await upstream.posted;
+  upstream.finish();
+  await job;
+  assert.equal(history.reads, 3);
 });

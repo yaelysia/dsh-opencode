@@ -228,12 +228,72 @@ export class OpenCodeServeClient {
       // Verify ALL tool parts, including SSE-only events. Only the exact
       // terminal denial from our confirmed native guard can carry intent into
       // DSH. Provider-executed, unknown or successful tool events still fail.
+      const observed = [...(collector?.nativeToolParts.values() ?? [])];
+      const finalParts = response.parts.filter(nativeToolPart);
       const native = new Map();
-      for (const part of collector?.nativeToolParts.values() ?? []) {
-        native.set(part.id, part);
-      }
-      for (const part of response.parts.filter(nativeToolPart)) {
-        native.set(part.id ?? part.callID ?? Symbol(), part);
+      for (const part of observed) native.set(part.id, part);
+      for (const part of finalParts) native.set(part.id ?? part.callID ?? Symbol(), part);
+
+      // SSE part.updated first publishes 'pending'/'running', then the guard
+      // produces the terminal 'error'. The synchronous /message response may
+      // contain only the final assistant step and omit earlier tool parts.
+      // Never interpret intermediate SSE states as final tool execution.
+      const finalIds = new Set(finalParts.map(part => part.id).filter(Boolean));
+      const needsHistory = observed.some(part => !finalIds.has(part.id))
+        || [...native.values()].some(part => ['pending', 'running'].includes(part.state?.status));
+      if (needsHistory) {
+        if (!this.guardedReadCompatibility) {
+          throw failure('Unverified OpenCode native tool activity', 'OPENCODE_TOOL_BOUNDARY');
+        }
+        // Do not allow even a transient provider-executed event to be
+        // rewritten as a denied event by later history snapshots.
+        for (const part of observed) {
+          if (part.state?.status === 'completed' || part.metadata?.providerExecuted
+            || part.state?.metadata?.providerExecuted) {
+            throw failure('OpenCode native tool may have executed', 'OPENCODE_TOOL_BOUNDARY');
+          }
+        }
+        const wanted = new Set([...native.values()].map(part => part.messageID).filter(Boolean));
+        if (response.info?.id && finalParts.length) wanted.add(response.info.id);
+        if (!wanted.size) {
+          throw failure('OpenCode tool event has no assistant message identity',
+            'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+        }
+        let settled = false;
+        for (let attempt = 0; attempt < 3 && !settled; attempt++) {
+          const history = await this.request(
+            '/session/' + encodeURIComponent(session.id) + '/message?limit=80',
+            undefined, options?.signal, 'GET');
+          if (!Array.isArray(history)) {
+            throw failure('OpenCode returned invalid tool history',
+              'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+          }
+          const verified = new Map();
+          for (const entry of history) {
+            if (entry?.info?.role !== 'assistant' || !wanted.has(entry.info.id)
+              || !Array.isArray(entry.parts)) continue;
+            for (const part of entry.parts.filter(nativeToolPart)) {
+              if (typeof part.id === 'string') verified.set(part.id, part);
+            }
+          }
+          const missing = [...native.values()].some(part =>
+            !part.id || !verified.has(part.id)
+            || verified.get(part.id).messageID !== part.messageID);
+          if (!missing) {
+            // Include extra native tools in these same assistant messages:
+            // no successful execution may be hidden by missing SSE events.
+            for (const [id, part] of verified) native.set(id, part);
+            settled = [...native.values()].every(part =>
+              ['error', 'completed'].includes(part.state?.status));
+          }
+          if (!settled && attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 120));
+          }
+        }
+        if (!settled) {
+          throw failure('OpenCode native tool never reached a verifiable terminal state',
+            'NATIVE_TOOL_HISTORY_UNAVAILABLE');
+        }
       }
       const guardedCalls = inspectNativeToolParts([...native.values()],
         { guarded: this.guardedReadCompatibility });

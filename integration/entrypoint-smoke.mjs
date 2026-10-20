@@ -246,3 +246,57 @@ test('published DSH BlockAssembler prefers authoritative block-end after a diver
   assert.equal(assembled.message({ provider, model }).content[0].text, 'Authoritative text');
   assert.equal(assembled.finish.kind, 'stop');
 });
+
+test('real DSH BlockAssembler verifies a pending SSE native tool from OpenCode history', { timeout: 6000 }, async () => {
+  const provider = 'opencode-serve', model = 'deepseek-v4.1-flash-free';
+  const sid = 'hist-tool-1', mid = 'ai-tool-1';
+  const encoder = new TextEncoder();
+  let feed, posts = 0, reads = 0;
+  const pending = { type: 'tool', id: 'native-tool-1', sessionID: sid,
+    messageID: mid, tool: 'read', state: { status: 'pending', input: {
+      filePath: 'file.txt',
+    } } };
+  const denied = { ...pending, state: { status: 'error',
+    input: { filePath: 'file.txt' }, error: 'DSH_OPENCODE_NATIVE_TOOL_BLOCKED' } };
+  const emit = (type, properties = {}) => feed.enqueue(encoder.encode(
+    'data: ' + JSON.stringify({ type, properties }) + '\n\n'));
+  const mock = async (url, init) => {
+    const route = new URL(url).pathname;
+    if (route === '/session') return Response.json({ id: sid });
+    if (route === '/event') return new Response(new ReadableStream({
+      start(controller) { feed = controller; emit('server.connected'); },
+    }), { headers: { 'content-type': 'text/event-stream' } });
+    if (route.endsWith('/message') && init.method === 'GET') {
+      reads++;
+      return Response.json([{ info: { id: mid, role: 'assistant', sessionID: sid },
+        parts: [denied] }]);
+    }
+    if (route.endsWith('/message') && init.method === 'POST') {
+      posts++;
+      emit('message.updated', { sessionID: sid,
+        info: { id: mid, role: 'assistant', sessionID: sid } });
+      emit('message.part.updated', { sessionID: sid, part: pending });
+      await sleep(25);
+      return Response.json({ info: { modelID: model },
+        parts: [{ type: 'text', text: 'Checking the workspace.' }] });
+    }
+    throw Error('Unexpected endpoint ' + url);
+  };
+  const adapter = createAdapter({ guardedReadCompatibility: true,
+    ssePreviewEnabled: true }, mock);
+  const prepared = await adapter.prepareCall(provider, model);
+  const assembler = new BlockAssembler();
+  for await (const chunk of prepared.stream({ provider, model,
+    tools: [{ name: 'read', description: 'Read DSH file',
+      parameters: { type: 'object', properties: {
+        file_path: { type: 'string' },
+      }, required: ['file_path'] } }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Read file.txt' }] }],
+  })) assembler.push(chunk);
+  assert.equal(reads, 1);
+  assert.equal(posts, 1);
+  assert.equal(assembler.finish.kind, 'tool-calls');
+  assert.equal(assembler.message({ provider, model }).content[0].name, 'read');
+  assert.deepEqual(JSON.parse(assembler.message({ provider, model }).content[0].arguments),
+    { file_path: 'file.txt' });
+});

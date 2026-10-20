@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.7`（DSH 指令优先级和工作区工具选择修复）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.8`（SSE 工具终态回查修复）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -25,7 +25,8 @@ DSH Agent
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
 - **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
-- **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。\n- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
+- **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。\n- **SSE 工具终态回查**：SSE 先发 `pending/running`，不代表工具已执行，也不代表最终失败；OpenCode 的 `/message` 还可能只返回最终 assistant 步骤，遗漏前面经守卫拒绝的工具。遇到无法从最终响应确认的工具事件时，桥接器使用官方只读 `GET /session/:id/message?limit=80` 查询终态，按工具 part ID 与 assistant message ID 验证，最多有限重查两次。仅在最终状态明确为本地守卫拒绝时才转成 DSH tool-call；缺失、未完成或已执行迹象仍拒绝。
+- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
 - **SSE 最终纠正**：`/event` 增量是预览，完整 `/message` 响应才是最终文本。当两者不一致时由 DSH `block-end` 纠正内容，不会在成功生成后抛出 `STREAM_MISMATCH`。诊断只记录字符数，不记录正文。
 - 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
 - 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
@@ -138,7 +139,8 @@ node .\scripts\doctor.mjs --stream-probe
 | `NETWORK_BLOCKED` / `CLIENT_RESTRICTED` | OpenCode 网关拒绝，不会绕过限制 |
 | `MODEL_NOT_FOUND` / `MODEL_MISMATCH` | 服务缺少指定模型，或服务返回了其他模型 |
 | `INVALID_TOOL_CALL` / `UNDECLARED_TOOL_CALL` | 模型未按协议输出，或请求了 DSH 未声明的工具 |
-| `OPENCODE_TOOL_BOUNDARY` | 收到未验证为本地守卫拒绝的原生工具事件，或存在 provider 侧执行迹象；仍坚决拒绝 |
+| `OPENCODE_TOOL_BOUNDARY` | 原生工具出现了真实执行、provider-executed 或其他不可信状态；仍坚决拒绝 |
+| `NATIVE_TOOL_HISTORY_UNAVAILABLE` | SSE 工具事件无法在 OpenCode 官方只读消息历史中验证终态；请求不会交给 DSH 执行 |
 | `GUARDED_TOOL_UNMAPPED` | 安全拦截正常，但第一个原生工具请求无法明确对应当前 DSH 工具定义；不会执行任何工具 |
 | `SSE_NO_DELTAS` | 显式流式探针没有收到任何助手文本事件；检查 OpenCode 版本与其 SSE 发布情况 |
 | `CLIENT_RESTRICTED` | 上游明确拒绝该免费模型请求；可能由服务端免费模型策略、版本或工具权限配置触发。关闭 SSE 不保证解决；不能为了让请求通过而开放 OpenCode 原生工具权限 |
