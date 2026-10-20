@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.6`（工具调用和流式一致性修复）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.7`（DSH 指令优先级和工作区工具选择修复）。** 默认使用此前的同步 `/message` 路径；SSE 预览不再默认打开，避免未经真实环境验收的增量机制影响普通会话。 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -25,7 +25,7 @@ DSH Agent
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
 - **可选 SSE 增量输出（默认关闭）**：仅显式开启 `ssePreviewEnabled` 后，才会在同步 `/message` 请求期间订阅 `/event` SSE 并发送 DSH `text-delta`；最终响应负责校验与补齐。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
-- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
+- **DSH 指令与工作区优先级**：DSH `system` 和 `developer` 消息一并放入 OpenCode 模型请求的 system slot，不再把 developer 规则降级为普通用户文本。在提供文件读写、搜索工具时明确优先使用 DSH `read/write/edit/glob/grep`，而非 `pwsh/bash`。OpenCode 的隔离子进程工作目录不是 DSH 工作区；由 DSH 专用工具决定相对文件路径，受守卫拦截的原生 shell `workdir` 不会跨边界传给 DSH。\n- **拦截后转交 DSH**：兼容模式下，带有安全守卫明确拒绝标记的 OpenCode 原生 `read/write/edit/glob/grep/shell` 意图，可映射至本轮 DSH 已声明的同类工具和 JSON Schema，参数显式重命名。只有 DSH 可以审批或执行；没有匹配工具、事件不可信或 provider 侧已经执行仍报错；一次生成多个被拦截请求时，只把第一个交给 DSH，余下的等待下一轮模型决定。
 - **SSE 最终纠正**：`/event` 增量是预览，完整 `/message` 响应才是最终文本。当两者不一致时由 DSH `block-end` 纠正内容，不会在成功生成后抛出 `STREAM_MISMATCH`。诊断只记录字符数，不记录正文。
 - 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
 - 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
@@ -40,7 +40,7 @@ DSH Agent
 - 工具协议 JSON 前缀和后续参数会被缓冲；受守卫拒绝的原生工具意图也须完整验证、匹配当轮 DSH schema。只有检查通过才向 DSH 发送 `tool-call`，绝不把半截 JSON 当成已批准操作。
 - OpenCode `serve` 消息接口不直接接收动态 DSH 工具函数定义；温度、停止序列、最大输出 token 等请求控制目前也没有完整的原生映射，不应依赖它们得到精确语义。
 - 目前只声明文本输入模型；并不提供图像输入/生成能力。
-- 尚未通过真实 DSH Desktop 的授权 UI、允许/拒绝与连续工具调用验收。
+- **工具选择偏好依旧依赖模型遵循提示词**：此版本会完整传递 DSH 的 system/developer 约束，但不能保证模型永不提出 `pwsh` 调用。若要技术上彻底禁止某类 shell 操作，需要在 DSH 宿主权限策略或工具层实施拒绝，而不应偷偷移除用户有权使用的工具。DSH `pwsh` 在未传 `workdir` 时会读取 DSH session working-directory；实际目录不正确时，应结合对应会话 `tool/call` 和 `tool/result` 定位，不应让 OpenCode 的隔离目录取代它。\n- 尚未通过真实 DSH Desktop 的授权 UI、允许/拒绝与连续工具调用验收。
 
 ## 环境要求
 

@@ -318,3 +318,16 @@ test('several verified guarded native intents are sequenced one per DSH round', 
     'no other guarded intent was silently routed');
   assert.equal(server.calls.length, 2, 'no extra tool execution request');
 });
+
+test('native shell workdir is not propagated to the host shell', () => {
+  const call = intercepted('shell', { command: 'pwd', workdir: '/isolated-runtime/workspace' });
+  const mapped = translateGuardedTool(call, hostTools);
+  assert.equal(mapped.name, 'pwsh');
+  assert.deepEqual(JSON.parse(mapped.arguments), { command: 'pwd' });
+});
+
+test('bridge file-tool guidance takes priority over generic shell usage', () => {
+  const guidance = toolInstructions(hostTools);
+  assert.match(guidance, /glob\/grep\/read\/write\/edit tools instead of pwsh/);
+  assert.match(guidance, /current DSH workspace/);
+});
