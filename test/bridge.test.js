@@ -12,7 +12,7 @@ test('translates official OpenCode session response into DSH stream', async () =
       parts: [{ type: 'text', text: 'test reply' }],
     });
   };
-  const adapter = createAdapter({}, fetch);
+  const adapter = createAdapter({ streamingEnabled: false }, fetch);
   const request = await adapter.prepareCall('opencode-serve', 'deepseek-v4.1-flash-free');
   const result = [];
   for await (const chunk of request.stream({
@@ -102,6 +102,7 @@ test('normal calls wait for automatic startup; local title calls do not launch a
     ? { id: 'session-local' }
     : { info: { modelID: 'deepseek-v4.1-flash-free' }, parts: [{ type: 'text', text: '1' }] });
   const adapter = createAdapter({
+    streamingEnabled: false,
     ensureService: async () => { readyCalls++; },
   }, fetch);
   const prepared = await adapter.prepareCall('opencode-serve', 'deepseek-v4.1-flash-free');

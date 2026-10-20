@@ -110,7 +110,7 @@ test('cancelled local title requests return ABORTED without network traffic', as
 test('ordinary chat is not parsed as a title even if its content matches a title frame', async () => {
   const input = generate([{ seq: 1, text: 'literal input for chat' }]);
   const calls = [];
-  const adapter = createAdapter({}, async (url, init) => {
+  const adapter = createAdapter({ streamingEnabled: false }, async (url, init) => {
     calls.push({ url, body: JSON.parse(init.body) });
     return Response.json(url.endsWith('/session') ? { id: 'chat' }
       : { info: { modelID: DEFAULT_MODELS[0] }, parts: [{ type: 'text', text: 'Model reply' }] });
@@ -126,7 +126,7 @@ test('ordinary chat is not parsed as a title even if its content matches a title
 test('localTitles false retains the explicit cloud title path', async () => {
   const input = generate([{ seq: 1, text: 'Cloud summary input' }]);
   const calls = [];
-  const adapter = createAdapter({ localTitles: false }, async (url, init) => {
+  const adapter = createAdapter({ localTitles: false, streamingEnabled: false }, async (url, init) => {
     calls.push({ url, body: JSON.parse(init.body) });
     return Response.json(url.endsWith('/session') ? { id: 'cloud-title' }
       : { info: { modelID: DEFAULT_MODELS[0] }, parts: [{ type: 'text', text: 'Cloud title' }] });

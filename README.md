@@ -2,7 +2,7 @@
 
 通过 **OpenCode 官方 `serve` API**，把 OpenCode 模型接入 **DeepSeek Harness（DSH）** 原生模型选择器；由 DSH 执行和审批工具，OpenCode 仅负责模型推理。
 
-**当前版本：`0.2.0-alpha.1`（实验性）。** 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
+**当前版本：`0.2.0-alpha.2`（实验性流式输出）。** 基本模型对话和模拟工具闭环已覆盖自动化测试，**真实 DSH Desktop + 云端模型的工具授权闭环尚未验收**。OpenCode 免费模型可能因账户、地区、网络或服务端策略而不可用，本项目不提供绕过机制。
 
 ## 工作原理
 
@@ -23,6 +23,7 @@ DSH Agent
 ### 已实现
 
 - 官方 `/session` 和 `/session/:id/message` 接口适配；模型与会话路由、错误传播、取消和超时处理。
+- **增量文本输出**：在同步 `/message` 请求期间订阅 `/event` SSE，收到属于当前 assistant 消息的文本变化即发送 DSH `text-delta`；以最终 `/message` 响应核对并补齐缺失后缀。
 - DSH 工具定义转为模型可读 JSON Schema；文本协议解析、白名单校验、工具结果及 `callId` 回传。
 - 自动启动与释放插件拥有的 OpenCode 子进程；不终止未托管进程。
 - 仅支持隔离的 `dsh-bridge` Agent；`plan`、`build` 和自定义 Agent 均报 `BRIDGE_AGENT_REQUIRED`，防止绕过权限边界。
@@ -32,7 +33,8 @@ DSH Agent
 ### 目前限制
 
 - 工具调用使用**实验性单条文本协议** `DSH_TOOL_CALL_V1:{"name":"...","arguments":{...}}`，不是真正的原生 Function Calling。一次模型响应只能请求一个工具；模型未必总能遵守格式。
-- 输出等待 OpenCode 返回整条消息后再转换为 DSH 流块，不是真正逐 token 流式输出。
+- **流式输出依赖 OpenCode SSE 实际提供文本事件。** 如果 OpenCode 只发送心跳、事件接口失效或丢失增量，插件会等待 `/message` 的最终回复，不伪造逐 token 输出。OpenCode 1.18.x 曾出现 SSE 丢事件问题，1.19.3 的真实 Desktop 表现仍需验收。
+- 工具协议 JSON 前缀和后续参数会被缓冲，必须在模型最终响应完整且合法后，才会向 DSH 发送 `tool-call`；不会把半截 JSON 显示成普通文本。
 - OpenCode `serve` 消息接口不直接接收动态 DSH 工具函数定义；温度、停止序列、最大输出 token 等请求控制目前也没有完整的原生映射，不应依赖它们得到精确语义。
 - 目前只声明文本输入模型；并不提供图像输入/生成能力。
 - 尚未通过真实 DSH Desktop 的授权 UI、允许/拒绝与连续工具调用验收。
@@ -74,6 +76,7 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 | `runtimeRoot` | 自动计算 | 独立工作目录与运行数据 |
 | `strictOwnedServer` | `true` | 默认拒绝未托管服务；带 DSH 工具的请求总是要求托管服务 |
 | `toolBridgeEnabled` | `true` | 文本工具协议；关闭后收到 DSH 工具会明确报错 |
+| `streamingEnabled` | `true` | 尝试 SSE 真正增量文本输出；设为 `false` 可停用 SSE 并使用同步完整回复 |
 | `localTitles` | `true` | 标题不调用云端模型 |
 | `timeoutMs` | `120000` | 本机模型请求超时（毫秒） |
 | `passwordEnv` | `OPENCODE_SERVER_PASSWORD` | 连接外部手动服务时的环境变量键；托管服务始终生成新的随机密码 |
@@ -122,13 +125,14 @@ node .\scripts\doctor.mjs --probe --model glm-5.3-flash-free
 
 本 PR 合并前需要完成以下验证：
 
-1. 新会话进行不带工具的普通文本问答，确认没有 OpenCode Plan/Build 角色干扰。
-2. 使用 DSH 的**只读**文件工具读取测试文件，在 Trajectory 中确认执行者是 **DSH 工具运行时**。
-3. 手动拒绝一次工具授权，确认未发生 OpenCode 内部执行或文件修改。
-4. 在同一会话中继续提问，核对工具结果、错误标记与连续调用能够正确回传。
-5. 检查错误路径和日志不泄露密码或跨越权限边界。
+1. 新会话要求生成较长文字，观察是否在最终响应完成前持续显示文本。若只在完成后一次性显示，记录 OpenCode 版本和 SSE 事件情况，先排查上游 SSE。
+2. 不带工具的普通文本问答，确认没有 OpenCode Plan/Build 角色干扰。
+3. 使用 DSH 的**只读**文件工具读取测试文件，在 Trajectory 中确认执行者是 **DSH 工具运行时**。
+4. 手动拒绝一次工具授权，确认未发生 OpenCode 内部执行或文件修改。
+5. 在同一会话中继续提问，核对工具结果、错误标记与连续调用能够正确回传。
+6. 检查错误路径和日志不泄露密码或跨越权限边界。
 
-只读、拒绝、继续三条路径均通过后才取消 Draft 并合并。
+确认 SSE 增量与最终文本一致，且只读、拒绝、继续三条路径通过后才取消 Draft 并合并。
 
 ## 自动化测试
 
@@ -137,7 +141,7 @@ npm test
 npm pack --dry-run --ignore-scripts
 ```
 
-GitHub Actions 运行 Windows / Ubuntu × Node.js 22 / 24 单元测试，另在真实发布的 DSH 依赖上验证插件入口加载与注册。模拟服务和 localhost HTTP 测试**不等同于**真实 Desktop 云端联测。
+GitHub Actions 运行 Windows / Ubuntu × Node.js 22 / 24 单元测试（包括模拟 SSE 增量、工具协议缓冲、跨会话过滤、错误与最终结果校验），另在真实发布的 DSH 依赖上验证插件入口加载与注册。模拟服务和 localhost HTTP 测试**不等同于**真实 Desktop 云端联测。
 
 ## 参考
 

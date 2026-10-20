@@ -73,7 +73,7 @@ test('OpenCode native tool parts cause fail-closed response', () => {
 
 test('model tool decision becomes a DSH tool-call block, never executed by OpenCode', async () => {
   const server = mockServer([[{ type: 'text', text: callText }]]);
-  const adapter = createAdapter({}, server.fetch);
+  const adapter = createAdapter({ streamingEnabled: false }, server.fetch);
   const chunks = await getChunks(adapter, [user]);
   assert.deepEqual(chunks.map(c => c.type),
     ['block-start', 'tool-call-delta', 'block-end', 'finish']);

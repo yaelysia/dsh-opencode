@@ -52,7 +52,7 @@ test('real DSH BlockAssembler accepts the tool request and subsequent result', a
       : 'The requested tool returned a result.';
     return Response.json({ info: { modelID: model }, parts: [{ type: 'text', text: answer }] });
   };
-  const adapter = createAdapter({}, server);
+  const adapter = createAdapter({ streamingEnabled: false }, server);
   const prepared = await adapter.prepareCall(providers, model);
   const user = { role: 'user', content: [{ type: 'text', text: 'Read safe.txt' }] };
   const first = new BlockAssembler();

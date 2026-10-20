@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 import { failure, providerFailure } from './errors.js';
 import { localSessionTitle } from './title.js';
 import { BRIDGE_AGENT_ID, requireBridgeAgent } from './managed-agent.js';
+import { openSessionEvents, SessionEventAccumulator } from './opencode-events.js';
 import {
-  toolInstructions, parseToolRequest, assertNoOpenCodeToolParts, renderConversationMessage,
+  TOOL_CALL_PREFIX, toolInstructions, parseToolRequest, assertNoOpenCodeToolParts, renderConversationMessage,
 } from './tool-boundary.js';
 
 export const DEFAULT_MODELS = Object.freeze([
@@ -55,6 +56,7 @@ export class OpenCodeServeClient {
     this.logger = config.logger;
     this.ensureService = config.ensureService;
     this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
+    this.streamingEnabled = config.streamingEnabled !== false;
     this.sessions = new Map();
     this.pending = Promise.resolve();
     this.blocked = null;
@@ -97,8 +99,8 @@ export class OpenCodeServeClient {
   }
 
   // Serialize model requests, including auxiliary calls, instead of racing session creation.
-  complete(options) {
-    const task = this.pending.then(() => this.completeOnce(options));
+  complete(options, onSnapshot) {
+    const task = this.pending.then(() => this.completeOnce(options, onSnapshot));
     this.pending = task.catch(() => {});
     const signal = options?.signal;
     if (!signal) return task;
@@ -110,7 +112,42 @@ export class OpenCodeServeClient {
     });
   }
 
-  async completeOnce(options) {
+  // Ordered SSE snapshots with an authoritative final response.
+  async *streamResponse(options) {
+    const own = new AbortController();
+    const signal = options?.signal
+      ? AbortSignal.any([own.signal, options.signal]) : own.signal;
+    const items = [];
+    let done = false;
+    let response;
+    let error;
+    let notify;
+    const wake = () => { const fn = notify; notify = null; fn?.(); };
+    const task = this.complete({ ...options, signal }, this.streamingEnabled
+      ? snapshot => { if (!done) { items.push({ kind: 'snapshot', text: snapshot }); wake(); } }
+      : undefined);
+    task.then(result => { response = result; done = true; wake(); },
+      reason => { error = reason; done = true; wake(); });
+    try {
+      while (true) {
+        if (items.length) {
+          yield items.shift();
+          continue;
+        }
+        if (done) {
+          if (error) throw error;
+          yield { kind: 'response', response };
+          return;
+        }
+        await new Promise(resolve => { notify = resolve; });
+      }
+    } finally {
+      own.abort();
+      void task.catch(() => {});
+    }
+  }
+
+  async completeOnce(options, onSnapshot) {
     if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
     if (this.blocked && Date.now() < this.blocked.until) throw this.blocked.error;
     const tools = Array.isArray(options?.tools) ? options.tools : [];
@@ -142,9 +179,25 @@ export class OpenCodeServeClient {
       agent: this.agent, ...(system ? { system } : {}),
       parts: [{ type: 'text', text: prompt }],
     };
+    let events;
+    let eventPump;
+    let collector;
     try {
       if (!session) session = { id: await this.createSession(options?.signal), count: 0 };
+      if (onSnapshot) {
+        events = await openSessionEvents({
+          origin: this.origin, headers: this.headers(), fetchImpl: this.fetchImpl,
+          signal: options?.signal, logger: this.logger,
+        });
+        if (events) {
+          collector = new SessionEventAccumulator(session.id, onSnapshot);
+          eventPump = events.pump(event => collector.accept(event));
+        }
+      }
       const response = await this.request('/session/' + encodeURIComponent(session.id) + '/message', payload, options?.signal);
+      if (collector?.nativeToolSeen) {
+        throw failure('OpenCode emitted an internal tool event', 'OPENCODE_TOOL_BOUNDARY');
+      }
       if (response?.info?.error) throw providerFailure(response.info.error);
       if (!Array.isArray(response?.parts)) throw failure('OpenCode returned no message parts', 'INVALID_RESPONSE');
       assertNoOpenCodeToolParts(response.parts);
@@ -176,6 +229,9 @@ export class OpenCodeServeClient {
       }
       this.logger?.warn?.('dsh-opencode: [' + (error.code || 'UNKNOWN') + '] ' + error.message);
       throw error;
+    } finally {
+      events?.close();
+      await eventPump;
     }
   }
 }
@@ -208,22 +264,59 @@ export function createAdapter(config = {}, fetchImpl) {
           yield { type: 'finish', reason: { kind: 'stop' } };
           return;
         }
-        const response = await client.complete({ ...options, model: id });
-        const tool = response.dshToolCall;
-        if (tool) {
-          yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-          yield { type: 'tool-call-delta', index: 0, id: tool.id, name: tool.name,
-            argumentsDelta: tool.arguments };
-          yield { type: 'block-end', index: 0, block: { type: 'tool-call', ...tool } };
-        } else {
-          const content = response.parts.filter(part => part?.type === 'text')
-            .map(part => part.text || '').join('');
-          yield* textChunks(content);
+        let streamed = '';
+        let lastSnapshot = '';
+        let textStarted = false;
+        for await (const item of client.streamResponse({ ...options, model: id })) {
+          if (item.kind === 'snapshot') {
+            const snapshot = item.text;
+            if (!snapshot.startsWith(lastSnapshot)) continue;
+            lastSnapshot = snapshot;
+            // A partial tool envelope must never be visible or dispatched.
+            const candidate = snapshot.trimStart();
+            if (!candidate || TOOL_CALL_PREFIX.startsWith(candidate)
+              || candidate.startsWith(TOOL_CALL_PREFIX)) continue;
+            if (!snapshot.startsWith(streamed)) continue;
+            if (!textStarted) {
+              yield { type: 'block-start', index: 0, blockType: 'text' };
+              textStarted = true;
+            }
+            const delta = snapshot.slice(streamed.length);
+            if (delta) {
+              yield { type: 'text-delta', index: 0, text: delta };
+              streamed = snapshot;
+            }
+            continue;
+          }
+          const response = item.response;
+          const tool = response.dshToolCall;
+          if (tool) {
+            if (textStarted) {
+              throw failure('Streamed text conflicts with the final DSH tool request', 'STREAM_MISMATCH');
+            }
+            yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+            yield { type: 'tool-call-delta', index: 0, id: tool.id, name: tool.name,
+              argumentsDelta: tool.arguments };
+            yield { type: 'block-end', index: 0, block: { type: 'tool-call', ...tool } };
+          } else {
+            const content = response.parts.filter(part => part?.type === 'text')
+              .map(part => part.text || '').join('');
+            if (!content.startsWith(streamed)) {
+              throw failure('OpenCode SSE text differs from the final message', 'STREAM_MISMATCH');
+            }
+            if (!textStarted) {
+              yield { type: 'block-start', index: 0, blockType: 'text' };
+            }
+            const tail = content.slice(streamed.length);
+            if (tail) yield { type: 'text-delta', index: 0, text: tail };
+            yield { type: 'block-end', index: 0, block: { type: 'text', text: content } };
+          }
+          const usage = response.info?.tokens;
+          if (usage) yield { type: 'usage', usage: { inputTokens: Number(usage.input) || 0,
+            outputTokens: Number(usage.output) || 0 } };
+          yield { type: 'finish', reason: { kind: tool ? 'tool-calls'
+            : response.info?.finish === 'length' ? 'max-tokens' : 'stop' } };
         }
-        const usage = response.info?.tokens;
-        if (usage) yield { type: 'usage', usage: { inputTokens: Number(usage.input) || 0, outputTokens: Number(usage.output) || 0 } };
-        yield { type: 'finish', reason: { kind: tool ? 'tool-calls'
-          : response.info?.finish === 'length' ? 'max-tokens' : 'stop' } };
       } };
     },
   };

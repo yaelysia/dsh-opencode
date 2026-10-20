@@ -16,6 +16,7 @@ export const Config = Schema.object({
   passwordEnv: Schema.string().default('OPENCODE_SERVER_PASSWORD'),
   localTitles: Schema.boolean().default(true),
   toolBridgeEnabled: Schema.boolean().default(true),
+  streamingEnabled: Schema.boolean().default(true),
   strictOwnedServer: Schema.boolean().default(true),
   autoStart: Schema.boolean().default(true),
   autoStartDirect: Schema.boolean().default(true),
