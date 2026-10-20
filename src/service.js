@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
 import net from 'node:net';
@@ -55,6 +56,9 @@ export class OpenCodeService {
     this.config = config;
     this.logger = deps.logger || console;
     this.env = deps.env || process.env;
+    // An unguessable local server password belongs to this plugin instance only.
+    this.ownedPassword = this.env[config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'] ||
+      randomBytes(32).toString('hex');
     this.platform = deps.platform || process.platform;
     this.fetchImpl = deps.fetchImpl || fetch;
     this.spawnImpl = deps.spawnImpl || spawn;
@@ -74,10 +78,16 @@ export class OpenCodeService {
     this.readyOwned = false;
   }
 
+  passwordForClient() {
+    // Never inject the generated secret into an unmanaged external server.
+    return this.owned ? this.ownedPassword :
+      this.env[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'];
+  }
+
   async health() {
     if (!this.target) return false;
     const headers = {};
-    const password = this.env[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'];
+    const password = this.passwordForClient();
     if (password) {
       const username = this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode';
       headers.authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
@@ -170,6 +180,7 @@ export class OpenCodeService {
       this.config.agent || BRIDGE_AGENT_ID,
       root,
     );
+    childEnv[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'] = this.ownedPassword;
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
     }
