@@ -33,6 +33,7 @@ test('isolates all OpenCode plugins and other agents from the DSH subprocess', (
   assert.equal(cfg.agent.reviewer, undefined);
   assert.deepEqual(cfg.plugin, []);
   assert.deepEqual(cfg.mcp, {});
+  assert.deepEqual(cfg.permission, { '*': 'deny' }, 'all OpenCode agents must lose native tools');
   assert.equal(child.XDG_CONFIG_HOME.endsWith('dsh-isolated-config'), true);
   assert.equal(child.OPENCODE_DISABLE_PROJECT_CONFIG, '1');
   assert.equal(cfg.agent['dsh-bridge'].prompt, BRIDGE_PROMPT);
