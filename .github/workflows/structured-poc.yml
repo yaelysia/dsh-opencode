@@ -1,0 +1,71 @@
+name: structured-plugin-poc
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  structured-plugin-poc:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch official OpenCode 1.19.3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fL --retry 2 https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-linux-x64.tar.gz -o /tmp/opencode.tar.gz
+          mkdir -p /tmp/opencode-bin
+          tar -xzf /tmp/opencode.tar.gz -C /tmp/opencode-bin
+          exe="$(find /tmp/opencode-bin -type f -name opencode -print -quit)"
+          test -n "$exe"
+          chmod +x "$exe"
+          echo "OPENCODE_TEST_EXE=$exe" >> "$GITHUB_ENV"
+      - name: Fetch official OpenCode 1.19.3 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-windows-x64.zip" -OutFile opencode-windows.zip
+          Expand-Archive -Path opencode-windows.zip -DestinationPath opencode-win -Force
+          $exe = Get-ChildItem -Path opencode-win -Filter opencode.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "OpenCode executable missing" }
+          "OPENCODE_TEST_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install pinned DSH contract packages
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @deepseek-ai/cordis@4.0.5 @deepseek-ai/schemastery@3.18.5 @deepseek-ai/dsh-llm@0.2.1-rc.2
+      - name: Verify pinned OpenCode CLI without installation scripts
+        run: node --test integration/bundled-opencode-smoke.mjs
+      - name: Real OpenCode plugin and DSH assembler (local mock model only)
+        env:
+          DSH_VALIDATE_ASSEMBLER: '1'
+        run: node --test integration/structured-plugin-poc.mjs
+      - name: Pack installable DSH plugin
+        run: npm pack --ignore-scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-opencode-structured-${{ runner.os }}
+          path: dsh-opencode-*.tgz
+          retention-days: 7
+
+  pinned-cli-pnpm:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify pinned optional binaries with pnpm and ignored scripts
+        run: node --test integration/pnpm-opencode-smoke.mjs

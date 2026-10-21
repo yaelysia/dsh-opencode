@@ -1,0 +1,51 @@
+{
+  "name": "dsh-opencode",
+  "version": "0.2.0-alpha.18",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "index.js",
+    "lib/client.js",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "doctor": "node scripts/doctor.mjs",
+    "start:opencode": "node scripts/start.mjs",
+    "test:structured": "node --test integration/structured-plugin-poc.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.0 <0.3.0"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "description": "DSH OpenCode bridge with managed structured tools and optional legacy transport",
+  "dependencies": {
+    "opencode-ai": "1.19.3"
+  }
+}

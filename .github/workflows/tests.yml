@@ -1,0 +1,76 @@
+name: tests
+on:
+  push:
+    branches: [master]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  node-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - run: npm pack --dry-run --ignore-scripts
+  entrypoint-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Exercise the actual published DSH adapter imports, not only our mock fetch.
+      - run: npm install --no-save --ignore-scripts --no-audit --no-fund @deepseek-ai/cordis@4.0.5 @deepseek-ai/schemastery@3.18.5 @deepseek-ai/dsh-llm@0.2.1-rc.2
+      - run: node --test integration/entrypoint-smoke.mjs integration/structured-entrypoint-smoke.mjs
+
+  opencode-1-19-3-guard-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Download official OpenCode 1.19.3 CLI (no model requests)
+        run: |
+          curl --fail --location --retry 2 --retry-delay 2 \
+            https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-linux-x64.tar.gz \
+            --output opencode-cli.tar.gz
+          mkdir -p opencode-cli
+          tar -xzf opencode-cli.tar.gz -C opencode-cli
+          executable="$(find "$PWD/opencode-cli" -type f -name opencode -print -quit)"
+          test -n "$executable"
+          chmod +x "$executable"
+          echo "OPENCODE_TEST_EXE=$executable" >> "$GITHUB_ENV"
+      - run: node --test integration/opencode-native-guard-smoke.mjs
+      # The model is a loopback mock: this checks real OpenCode's tool event
+      # and native guard state without using any free-tier/cloud model quota.
+      - run: node --test integration/opencode-real-native-event-smoke.mjs
+
+  opencode-1-19-3-windows-guard-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Download official OpenCode 1.19.3 Windows CLI (no model requests)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/anomalyco/opencode/releases/download/v1.19.3/opencode-windows-x64.zip" -OutFile opencode-windows.zip
+          Expand-Archive -Path opencode-windows.zip -DestinationPath opencode-win -Force
+          $exe = Get-ChildItem -Path opencode-win -Filter opencode.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "OpenCode executable missing from official zip" }
+          "OPENCODE_TEST_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - run: node --test integration/opencode-native-guard-smoke.mjs
+      - run: node --test integration/opencode-real-native-event-smoke.mjs
