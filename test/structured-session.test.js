@@ -126,6 +126,19 @@ test('edits to DSH history or the assistant echo invalidate reuse without duplic
   } finally { await f.close(); }
 });
 
+test('a modified final assistant echo is never skipped during Session reuse', async () => {
+  const f = await fixture();
+  try {
+    await f.invoke('echo-edited', [user('Original request')]);
+    const next = await f.invoke('echo-edited',
+      [user('Original request'), assistant('Altered reply'), user('Follow-up')]);
+    assert.equal(answer(next), 'reply-2');
+    assert.equal(f.creates, 2);
+    assert.match(f.requests[1].payload.parts[0].text, /Altered reply/);
+    assert.match(f.requests[1].payload.parts[0].text, /Follow-up/);
+  } finally { await f.close(); }
+});
+
 test('changes to system instructions and model identity never reuse an incompatible session', async () => {
   const f = await fixture();
   try {
