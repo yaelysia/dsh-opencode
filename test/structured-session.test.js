@@ -29,7 +29,7 @@ async function fixture(onPrompt = ({ post }) => 'reply-' + post) {
     const request = { sessionID, payload, post: requests.length + 1, signal: init.signal };
     requests.push(request);
     const result = await onPrompt({ ...request, broker });
-    return Response.json({ info: { modelID: model },
+    return Response.json({ info: { modelID: payload.model.modelID },
       parts: [{ id: 'answer-' + request.post, type: 'text', text: result }] });
   };
   const adapter = createStructuredAdapter({ timeoutMs: 2000, structuredHandoffTimeoutMs: 2000 }, broker, fetchImpl);
