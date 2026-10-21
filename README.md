@@ -2,7 +2,7 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前：0.2.0-alpha.13，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前：0.2.0-alpha.14，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
@@ -41,6 +41,14 @@ OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模�
 结构化模式自动启用托管服务和工具隔离，旧 read 兼容、外部服务、自动启动开关不控制这个模式；原有配置值不会被改写，关闭新模式后可以回到旧通道。任何新通道错误都不会触发隐式回退或放宽原生工具权限。
 
 `read` 声明仅为已观察到的免费模型兼容性保留；后台插件拒绝除 `dsh_call` 以外的原生工具执行。OpenCode 的运行目录不是 DSH 工作区，文件工具由 DSH 按会话工作区解析路径。
+
+## 工具结果之后的上游失败与重试安全
+
+如果 DSH 已经执行或拒绝了一次工具请求，OpenCode 在接收工具结果后继续生成时可能返回 `429 / Endpoint is unavailable`。这属于上游模型续接失败，不代表刚才的 DSH 工具没有成功执行。
+
+**已经交付过 DSH 工具调用的 OpenCode HTTP 请求一旦终止，就不能当作普通限流重发。** 新版以 `TOOL_CONTINUATION_FAILED` 保留原始失败原因和 HTTP 状态，并阻止 DSH 自动重试已消费的工具结果；同一工具结果重复提交时仍返回同一原始错误，不会偷偷再次执行工具。新的用户消息可以重新开始会话。工具交付前发生的 `RATE_LIMIT` 则仍交由 DSH 原有重试策略处理。
+
+这里解决的是**失败分类与重复执行风险**，并不代表 OpenCode 免费模型网关的 429 / `Endpoint is unavailable` 已修复。若同一模型持续在工具续接时被拒绝，需要单独验证服务端的工具连续调用兼容性。
 
 ## 配置与恢复默认
 
@@ -81,6 +89,7 @@ OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模�
 | `SERVER_GUARD_NOT_READY` | 后台插件未完成启动证明，拒绝继续模型请求 |
 | `CLIENT_RESTRICTED` / `NETWORK_BLOCKED` / `RATE_LIMIT` | 上游网关拒绝或限流，不自动尝试绕过 |
 | `TOOL_RESULT_REQUIRED` / `TOOL_RESULT_MISMATCH` | DSH 返回结果与当前等待的调用 ID 不符，不能重放 |
+| `TOOL_CONTINUATION_FAILED` | DSH 已收到工具调用后 OpenCode 模型续接失败；保留真实上游错误与状态，不允许重复提交已完成工具结果 |
 | `TOOL_RESULT_TIMEOUT` | 等待审批或工具结果过久，已结束等待 |
 | `CONCURRENT_STREAM` | 同一 DSH 会话出现重叠模型消费者 |
 | `OPENCODE_TOOL_BOUNDARY` | 发现不允许的原生执行迹象，停止而非降级执行 |

@@ -9,6 +9,23 @@ function textOf(content) {
     .map(p => p.text ?? '').join('\n');
 }
 const resultId = message => message?.toolCallId ?? message?.source?.callId ?? message?.callId;
+// DSH may retry provider errors before a tool has been handed off, but once a
+// DSH tool was emitted its result cannot safely restart a lost OpenCode POST.
+const RETRYABLE_PROVIDER_ERRORS = new Set([
+  'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE',
+]);
+const MAX_TERMINAL_FAILURES = 64;
+function afterToolFailure(error, handedOff) {
+  const source = error?.failure ?? error;
+  if (!handedOff || !RETRYABLE_PROVIDER_ERRORS.has(source?.code)) return error;
+  const reason = source?.message ?? error?.message ?? 'provider failure';
+  const code = source.code;
+  const status = source.status;
+  return failure('OpenCode model continuation failed after a DSH tool handoff '
+    + '(original ' + code + (status ? ' HTTP ' + status : '') + '): '
+    + reason + '. The completed DSH tool result cannot be safely replayed.',
+    'TOOL_CONTINUATION_FAILED', status);
+}
 function instructions(options) {
   const privileged = (options.messages ?? []).filter(m => ['system', 'developer'].includes(m.role));
   const workspace = (options.messages ?? []).filter(m => m.role === 'user'
@@ -27,6 +44,7 @@ export class StructuredAdapterRuntime {
     this.broker = broker;
     this.client = new OpenCodeServeClient(config, fetchImpl);
     this.turns = new Map();
+    this.terminalFailures = new Map();
     this.busy = new Set();
     this.cleanup = new Set();
     this.disposed = false;
@@ -64,8 +82,17 @@ export class StructuredAdapterRuntime {
 
   fail(turn, error) {
     if (turn.closed) return;
-    turn.error = error;
-    turn.queue = [{ kind: 'error', error }]; // Never emit queued tools after cancellation.
+    const terminal = afterToolFailure(error, turn.handedOff);
+    turn.error = terminal;
+    if (turn.lastCallId) {
+      // Keep the original failure for a stale retry of THIS exact tool result.
+      this.terminalFailures.delete(turn.key);
+      this.terminalFailures.set(turn.key, { callId: turn.lastCallId, error: terminal });
+      if (this.terminalFailures.size > MAX_TERMINAL_FAILURES) {
+        this.terminalFailures.delete(this.terminalFailures.keys().next().value);
+      }
+    }
+    turn.queue = [{ kind: 'error', error: terminal }]; // Never emit queued tools after cancellation.
     turn.wake?.(); turn.wake = null;
     this.close(turn);
   }
@@ -94,7 +121,8 @@ export class StructuredAdapterRuntime {
     const id = await this.client.createSession(options.signal);
     const turn = { id, key: this.key(options), queue: [], wake: null,
       controller: new AbortController(), timer: null, waiting: null, streaming: false,
-      closed: false, finished: false, error: null, delivered: new Map() };
+      closed: false, finished: false, error: null, delivered: new Map(),
+      handedOff: false, lastCallId: null };
     this.turns.set(turn.key, turn);
     this.bindSignal(turn, options.signal);
     try {
@@ -198,8 +226,14 @@ export class StructuredAdapterRuntime {
       this.arm(turn, this.client.timeoutMs, 'TIMEOUT');
     } else {
       if (options.messages?.at(-1)?.role === 'tool') {
+        const prior = this.terminalFailures.get(key);
+        if (prior && prior.callId === resultId(options.messages.at(-1))) {
+          // A DSH retry may not revive a lost POST or repeat a finished tool.
+          throw prior.error;
+        }
         throw failure('No pending OpenCode request for this DSH tool result', 'TOOL_RESULT_MISMATCH');
       }
+      this.terminalFailures.delete(key); // New human turn can start fresh.
       turn = await this.begin(options);
     }
     turn.streaming = true;
@@ -224,6 +258,8 @@ export class StructuredAdapterRuntime {
             continue;
           }
           turn.waiting = event.call;
+          turn.lastCallId = event.call.id;
+          turn.handedOff = true;
           this.arm(turn, this.handoffTimeoutMs, 'TOOL_RESULT_TIMEOUT');
           yield* blocks.end();
           const index = blocks.nextIndex;
@@ -261,6 +297,7 @@ export class StructuredAdapterRuntime {
     this.disposed = true;
     for (const turn of this.turns.values()) this.fail(turn, failure('DSH plugin stopped', 'BRIDGE_CLOSED'));
     await this.broker.dispose();
+    this.terminalFailures.clear();
     await Promise.allSettled([...this.cleanup]);
   }
 }

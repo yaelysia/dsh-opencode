@@ -35,3 +35,19 @@ The OpenCode context may advertise native `read` for gateway compatibility, but 
 
 Install this DSH Git plugin → open its detail/config page → enable “结构化工具通道（实验）” → save → restart DSH.
 Backend plugin files, loopback listener, credentials, runtime config and OpenCode process are automatic. The official CLI must already be installed. No manual OpenCode commands, plugin installation, or YAML changes are required.
+
+## 2026-10-21 — Post-tool upstream 429 and DSH retry boundary
+
+Real DSH Desktop session `session-5795e060-cad3-4e53-8ed6-ef279ab83748`:
+- `dsh_call(glob, {"pattern":"**/*.txt"})` reached the host, DSH returned `text.txt`.
+- The original retained OpenCode POST then failed during the next model inference with HTTP 429 and `Upstream request failed: Endpoint is unavailable`.
+- DSH's standard retry policy includes `RATE_LIMIT`; a retry of the **same tool-result step** could not recover the closed OpenCode POST and replaced the useful upstream error with `TOOL_RESULT_MISMATCH`.
+
+Guardrail: after any tool handoff, retryable model failures (`RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT`, `EMPTY_RESPONSE`) are wrapped as non-retryable `TOOL_CONTINUATION_FAILED`, preserving the original failure code, message and status. A bounded in-memory terminal error record keyed to DSH session/model/purpose and the last host tool call retains the correct error for accidental duplicate result delivery. A new user message starts a new cycle. No tool execution or HTTP model POST is repeated for a stale result.
+
+Tests:
+- Unit: mock OpenCode `dsh_call` → real private broker callback → DSH tool result → upstream 429; assert non-retryable error and zero duplicate POSTs. Before handoff, upstream 429 remains `RATE_LIMIT`.
+- Integration: published DSH `BlockAssembler` and `createToolResultMessage` exercise the same continuation failure.
+- This is not evidence of the cloud free gateway's reliability; real `deepseek-v4.1-flash-free` may still return HTTP 429 after tools.
+
+Follow-up: investigate provider-side post-tool 429 independently rather than replaying already executed DSH actions or bypassing provider limitations.
