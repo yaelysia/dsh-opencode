@@ -36,7 +36,8 @@ function mockModel() {
       const nativeProbe = body.messages.some(m => m.role === 'user'
         && JSON.stringify(m.content).includes('DSH_NATIVE_SHELL_PROBE'));
       records.push({ advertised: body.tools.map(t => t.function.name), count: results.length,
-        results: results.map(m => m.content), system, ptc, nativeProbe });
+        results: results.map(m => m.content), system, ptc, nativeProbe,
+        userPrompts: body.messages.filter(m => m.role === 'user').map(m => JSON.stringify(m.content)) });
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const frame = (delta, finish_reason = null) => res.write('data: ' + JSON.stringify({
         id: 'chat-local', object: 'chat.completion.chunk', created: 1760000000, model,
@@ -149,6 +150,7 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
   const user = { role: 'user', content: [{ type: 'text', text: 'Find, read and append to text.txt in the DSH workspace.' }] };
   try {
     await service.ready();
+    let completedHistory, completedReply;
     await t.test('glob → read → edit resumes one POST and only the DSH harness touches files', async () => {
       await writeFile(workspace, 'ok');
       const history = [user], dispatched = [], before = messagePosts;
@@ -160,7 +162,10 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
         const call = assistant ? assistant.content.find(c => c.type === 'tool-call')
           : chunks.find(c => c.type === 'block-end' && c.block.type === 'tool-call')?.block;
         if (!call) {
-          assert.equal(step, 3); assert.equal(chunks.at(-1).reason.kind, 'stop'); break;
+          assert.equal(step, 3); assert.equal(chunks.at(-1).reason.kind, 'stop');
+          completedHistory = [...history];
+          completedReply = chunks.findLast(c => c.type === 'block-end' && c.block.type === 'text')?.block.text;
+          break;
         }
         assert.equal(chunks.at(-1).reason.kind, 'tool-calls');
         assert.equal(await readFile(workspace, 'utf8'), 'ok', 'OpenCode must never write the file');
@@ -179,6 +184,25 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
       assert.equal(await readFile(workspace, 'utf8'), 'ok\nhello world');
       assert.equal(messagePosts - before, 1, 'resume the existing HTTP model cycle, do not replay it');
       assert.equal(broker.calls.size, 0); assert.equal(adapter.runtime.turns.size, 0);
+    });
+    await t.test('real OpenCode reuses a completed Session for the next human turn', async () => {
+      const key = JSON.stringify(['success', model, 'chat']);
+      const previous = adapter.runtime.sessions.entries.get(key);
+      assert.equal(previous?.state, 'idle');
+      const beforePosts = messagePosts, beforeMock = mock.records.length;
+      const next = await invoke('success', [...completedHistory,
+        { role: 'assistant', content: [{ type: 'text', text: completedReply }] },
+        { role: 'user', content: [{ type: 'text', text: 'Summarize what changed.' }] },
+      ]);
+      assert.equal(next.at(-1).reason.kind, 'stop');
+      assert.equal(messagePosts - beforePosts, 1, 'a new human turn needs exactly one POST');
+      assert.equal(adapter.runtime.sessions.entries.get(key)?.id, previous.id,
+        'the next human turn must reuse the actual OpenCode Session ID');
+      const latest = mock.records.slice(beforeMock).at(-1);
+      assert.equal(latest.count, 3, 'prior tool results must remain in native OpenCode history');
+      assert.equal(latest.userPrompts.filter(x => x.includes('Find, read and append')).length, 1,
+        'previous user input must not be submitted a second time');
+      assert.equal(latest.userPrompts.filter(x => x.includes('Summarize what changed.')).length, 1);
     });
     await t.test('write refusal is returned to OpenCode, no forced edit', async () => {
       await writeFile(workspace, 'ok');
