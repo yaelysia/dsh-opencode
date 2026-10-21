@@ -51,3 +51,21 @@ jobs:
           name: dsh-opencode-structured-${{ runner.os }}
           path: dsh-opencode-*.tgz
           retention-days: 7
+
+  pinned-cli-pnpm:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify pinned optional binaries with pnpm and ignored scripts
+        run: node --test integration/pnpm-opencode-smoke.mjs
