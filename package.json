@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode",
-  "version": "0.2.0-alpha.17",
+  "version": "0.2.0-alpha.18",
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -44,5 +44,8 @@
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
     "@deepseek-ai/schemastery": "^3.18.4"
   },
-  "description": "DSH OpenCode bridge with managed structured tools and optional legacy transport"
+  "description": "DSH OpenCode bridge with managed structured tools and optional legacy transport",
+  "dependencies": {
+    "opencode-ai": "1.19.3"
+  }
 }

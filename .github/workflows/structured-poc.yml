@@ -38,6 +38,8 @@ jobs:
           "OPENCODE_TEST_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Install pinned DSH contract packages
         run: npm install --no-save --ignore-scripts --no-audit --no-fund @deepseek-ai/cordis@4.0.5 @deepseek-ai/schemastery@3.18.5 @deepseek-ai/dsh-llm@0.2.1-rc.2
+      - name: Verify pinned OpenCode CLI without installation scripts
+        run: node --test integration/bundled-opencode-smoke.mjs
       - name: Real OpenCode plugin and DSH assembler (local mock model only)
         env:
           DSH_VALIDATE_ASSEMBLER: '1'

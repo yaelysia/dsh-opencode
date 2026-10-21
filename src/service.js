@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { childEnvironment, secureServerEnvironment } from './service-env.js';
 import { BRIDGE_AGENT_ID, managedAgentEnvironment, requireBridgeAgent } from './managed-agent.js';
 import { failure } from './errors.js';
+import { bundledExecutable } from './opencode-binary.js';
 
 const START_TIMEOUT_MS = 15_000;
 const CHECK_INTERVAL_MS = 250;
@@ -24,14 +25,10 @@ export function localEndpoint(endpoint) {
   return { port, origin: 'http://127.0.0.1:' + port };
 }
 
-export function installedExecutable(config = {}, env = process.env, platform = process.platform) {
+export function installedExecutable(config = {}, env = process.env,
+  platform = process.platform, bundledOptions = {}) {
   const custom = config.opencodeExecutable || env.OPENCODE_EXECUTABLE;
-  if (custom) return path.resolve(custom);
-  if (platform === 'win32') {
-    if (!env.LOCALAPPDATA) throw failure('OpenCode executable not configured: set opencodeExecutable', 'SERVER_NOT_CONFIGURED');
-    return path.join(env.LOCALAPPDATA, 'Programs', 'OpenCodeCLI', 'opencode.exe');
-  }
-  return 'opencode';
+  return custom ? path.resolve(custom) : bundledExecutable({ platform, ...bundledOptions });
 }
 
 async function portAvailable(port) {

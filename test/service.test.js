@@ -47,10 +47,7 @@ test('changes only the child environment, and keeps existing XDG settings', () =
   assert.ok(childEnvironment(original, '/myroot', false).HTTP_PROXY);
 });
 
-test('locates the standalone exe without using the broken npm shim', () => {
-  assert.match(installedExecutable({}, { LOCALAPPDATA: 'C:\\Users\\Administrator\\AppData\\Local' }, 'win32'),
-    /opencode\.exe$/);
-});
+
 
 test('reuses healthy external server and does not stop it', async () => {
   const external = await externalServer(healthy);
