@@ -33,14 +33,31 @@ function mockModel() {
       const system = body.messages.filter(m => m.role === 'system').map(m => m.content);
       const ptc = body.messages.some(m => m.role === 'user'
         && JSON.stringify(m.content).includes('PTC_INTEGRATION_CASE'));
+      const nativeProbe = body.messages.some(m => m.role === 'user'
+        && JSON.stringify(m.content).includes('DSH_NATIVE_SHELL_PROBE'));
       records.push({ advertised: body.tools.map(t => t.function.name), count: results.length,
-        results: results.map(m => m.content), system, ptc });
+        results: results.map(m => m.content), system, ptc, nativeProbe });
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const frame = (delta, finish_reason = null) => res.write('data: ' + JSON.stringify({
         id: 'chat-local', object: 'chat.completion.chunk', created: 1760000000, model,
         choices: [{ index: 0, delta, finish_reason }],
       }) + '\n\n');
       frame({ role: 'assistant' });
+      if (nativeProbe) {
+        if (results.length) {
+          frame({ content: 'The native shell call was rejected by the DSH tool guard.' });
+          frame({}, 'stop');
+        } else {
+          frame({ tool_calls: [{ index: 0, id: 'call_mock_native_probe', type: 'function',
+            function: { name: 'bash', arguments: JSON.stringify({
+              command: 'echo DSH_NATIVE_SHELL_PROBE_EXECUTED',
+              description: 'Guard-only native shell probe',
+            }) } }] });
+          frame({}, 'tool_calls');
+        }
+        res.end('data: [DONE]\\n\\n');
+        return;
+      }
       if (ptc) {
         if (results.length) {
           frame({ content: 'PTC handoff completed through DSH.' });
@@ -104,6 +121,10 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
       const env = { ...options.env, OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
         OPENCODE_DISABLE_MODELS_FETCH: 'true', OPENCODE_DISABLE_CLAUDE_CODE: 'true',
         npm_config_offline: 'true', npm_config_fetch_retries: '0' }, value = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+      // A compatibility surface experiment, never activated in production by
+      // this test-only commit. Test whether the official OpenCode hook denies
+      // native bash BEFORE an ask permission can stall the retained POST.
+      value.agent['dsh-bridge'].permission.bash = 'ask';
       value.provider = { local: { npm: '@ai-sdk/openai-compatible', name: 'Local test only',
         options: { baseURL: 'http://127.0.0.1:' + mock.server.address().port + '/v1', apiKey: 'local-test' },
         models: { [model]: { name: model, limit: { context: 32000, output: 1024 } } } } };
@@ -190,6 +211,25 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
         content: [{ type: 'text', text: 'User denied the tool request' }],
       }])));
       assert.equal(broker.calls.size, 0); assert.equal(adapter.runtime.turns.size, 0);
+    });
+    await t.test('advertised ask-only bash still fails closed before execution', async () => {
+      const before = mock.records.length;
+      const prompt = { role: 'user', content: [
+        { type: 'text', text: 'DSH_NATIVE_SHELL_PROBE: deliberately request a native shell action.' },
+      ] };
+      const chunks = await invoke('guard-probe', [prompt]);
+      assert.equal(chunks.at(-1).reason.kind, 'stop');
+      assert.equal(chunks.some(c => c.type === 'tool-call-delta'), false,
+        'a native bash attempt must not be forwarded to DSH as an approved tool call');
+      const records = mock.records.slice(before).filter(r => r.nativeProbe);
+      assert.ok(records.length >= 2, 'the native tool error must return to the mock model');
+      assert.ok(records[0].advertised.includes('bash'),
+        'bash must remain advertised when its permission is ask');
+      assert.ok(records[0].advertised.includes('dsh_call'),
+        'the DSH-only proxy remains advertised');
+      assert.ok(records.some(r => r.results.some(text =>
+        String(text).includes('DSH_STRUCTURED_NATIVE_TOOL_BLOCKED'))),
+      'the plugin must block bash before the OpenCode shell executes');
     });
     await t.test('PTC system SDK is sent once and run_code crosses the real OpenCode plugin', async () => {
       const ptcTools = [{ name: 'run_code', parameters: {
