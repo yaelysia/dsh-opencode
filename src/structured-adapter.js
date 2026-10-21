@@ -3,6 +3,9 @@ import { failure, providerFailure } from './errors.js';
 import { openSessionEvents } from './opencode-events.js';
 import { StructuredEventFeed, StructuredBlocks } from './structured-events.js';
 import { StructuredSessionRegistry } from './structured-session.js';
+import { ContextBudget, consumedTokens } from './context-budget.js';
+import { SessionJournal } from './session-journal.js';
+import path from 'node:path';
 
 function textOf(content) {
   if (typeof content === 'string') return content;
@@ -45,15 +48,66 @@ export class StructuredAdapterRuntime {
     this.broker = broker;
     this.client = new OpenCodeServeClient(config, fetchImpl);
     this.turns = new Map();
-    this.sessions = new StructuredSessionRegistry();
+    this.cleanup = new Set();
+    this.journal = new SessionJournal({
+      directory: config.sessionJournalRoot ? path.join(config.sessionJournalRoot, 'dsh-opencode-sessions') : null,
+      removeSession: id => this.deleteOwnedSession(id), logger: config.logger,
+    });
+    this.sessions = new StructuredSessionRegistry({
+      onRetire: id => this.reclaim(id),
+      maxIdle: 32,
+      idleTtlMs: 30 * 60_000,
+    });
+    this.contextBudget = new ContextBudget(this.client, { logger: config.logger });
+    this.sweeper = setInterval(() => this.sessions.sweep(), 60_000);
+    this.sweeper.unref?.();
     this.terminalFailures = new Map();
     this.busy = new Set();
-    this.cleanup = new Set();
     this.disposed = false;
     this.handoffTimeoutMs = config.structuredHandoffTimeoutMs ?? 600000;
   }
 
   key(options) { return JSON.stringify([options.sessionId ?? '', options.model, options.purpose ?? 'chat']); }
+
+  async deleteOwnedSession(id) {
+    try {
+      await this.client.request('/session/' + encodeURIComponent(id), undefined,
+        AbortSignal.timeout(3500), 'DELETE');
+    } catch (error) {
+      if (error.failure?.status !== 404) throw error;
+    }
+  }
+
+  reclaim(id) {
+    const task = this.journal.retire(id);
+    this.cleanup.add(task);
+    void task.finally(() => this.cleanup.delete(task));
+    return task;
+  }
+
+  async compact(id, model, signal) {
+    // The compaction agent may need to render system instructions through the
+    // OpenCode plugin hook. Give it an explicit EMPTY DSH tool catalog, never
+    // inherited workspace grants. The broker still cannot execute any tools.
+    this.broker.register(id, { tools: [], instructions: '', onCall() {
+      throw failure('Compaction must not request DSH tools', 'COMPACTION_TOOL_BLOCKED');
+    } });
+    try {
+      const result = await this.client.request(
+        '/session/' + encodeURIComponent(id) + '/summarize',
+        { providerID: this.client.backendProviderId, modelID: model, auto: false },
+        signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
+          : AbortSignal.timeout(120000));
+      if (result !== true) throw failure('OpenCode did not confirm compaction', 'CONTEXT_COMPACTION_FAILED');
+    } catch (error) {
+      if (signal?.aborted) throw failure('Context compaction cancelled', 'ABORTED');
+      throw failure('OpenCode could not compact its Session (' +
+        (error.code || error.failure?.code || 'MODEL_ERROR') + '); DSH history is unchanged',
+      'CONTEXT_COMPACTION_FAILED', error.failure?.status);
+    } finally {
+      this.broker.unregister(id);
+    }
+  }
 
   publish(turn, event) {
     if (turn.closed) return;
@@ -109,16 +163,22 @@ export class StructuredAdapterRuntime {
     turn.events?.close();
     if (turn.dshSessionId) {
       if (turn.completed && turn.finished && !turn.error) {
-        this.sessions.complete(turn.key, turn.id, turn.dshMessages, turn.system, turn.reply);
+        this.sessions.complete(turn.key, turn.id, turn.dshMessages, turn.system,
+          turn.reply, turn.lastUsage);
       } else {
         this.sessions.invalidate(turn.key, turn.id);
       }
     }
     if (this.turns.get(turn.key) === turn) this.turns.delete(turn.key);
     if (!turn.finished) {
+      // A failed/aborted turn may still be executing. Delete only after the
+      // owned server acknowledges abort; otherwise keep the journal for recovery.
       const stop = this.client.request('/session/' + encodeURIComponent(turn.id) + '/abort', {},
-        AbortSignal.timeout(2000)).catch(() => {}).finally(() => this.cleanup.delete(stop));
+        AbortSignal.timeout(2000)).then(() => this.reclaim(turn.id)).catch(() => {})
+        .finally(() => this.cleanup.delete(stop));
       this.cleanup.add(stop);
+    } else if (!turn.completed || turn.error) {
+      this.reclaim(turn.id);
     }
   }
 
@@ -129,17 +189,46 @@ export class StructuredAdapterRuntime {
     if (this.disposed || options.signal?.aborted) throw failure('Structured startup cancelled', 'ABORTED');
     const key = this.key(options);
     const system = instructions(options);
+    await this.journal.init();
     const reusable = options.sessionId ? this.sessions.plan(key, options.messages ?? [], system) : null;
-    const id = reusable?.id ?? await this.client.createSession(options.signal);
-    const turn = { id, key, queue: [], wake: null, dshSessionId: options.sessionId,
-      dshMessages: options.messages ?? [], system, reply: '', completed: false,
-      controller: new AbortController(), timer: null, waiting: null, streaming: false,
-      closed: false, finished: false, error: null, delivered: new Map(),
-      handedOff: false, lastCallId: null };
-    if (options.sessionId) this.sessions.active(key, id);
-    this.turns.set(key, turn);
-    this.bindSignal(turn, options.signal);
+    let id = reusable?.id;
+    let turn;
     try {
+      const prompt = renderMessages((reusable?.messages ?? options.messages ?? [])
+        .filter(m => !['system', 'developer'].includes(m.role)));
+      if (!prompt.trim()) throw failure('No message for OpenCode', 'INVALID_REQUEST');
+      const window = await this.contextBudget.limit(options.model, options.signal);
+      const budget = this.contextBudget.check({
+        window, prompt, system, tools: options.tools, reused: Boolean(reusable),
+        priorTokens: reusable?.lastUsage,
+      });
+      if (budget.action === 'reject') {
+        throw failure('OpenCode input exceeds its safe model budget (estimated ' +
+          budget.incoming + ' / ' + budget.usable +
+          ' tokens). DSH history was not truncated.', 'CONTEXT_LIMIT_EXCEEDED');
+      }
+      if (budget.action === 'compact') {
+        try { await this.compact(id, options.model, options.signal); }
+        catch (error) {
+          // An interrupted compaction may have changed internal OpenCode state.
+          // Never silently reuse that uncertain Session.
+          this.sessions.release(key, id);
+          this.sessions.invalidate(key, id);
+          throw error;
+        }
+      }
+      if (!id) {
+        id = await this.client.createSession(options.signal);
+        await this.journal.track(id);
+      }
+      turn = { id, key, queue: [], wake: null, dshSessionId: options.sessionId,
+        dshMessages: options.messages ?? [], system, reply: '', completed: false, lastUsage: null,
+        controller: new AbortController(), timer: null, waiting: null, streaming: false,
+        closed: false, finished: false, error: null, delivered: new Map(),
+        handedOff: false, lastCallId: null };
+      if (options.sessionId) this.sessions.active(key, id);
+      this.turns.set(key, turn);
+      this.bindSignal(turn, options.signal);
       if (this.disposed || turn.closed) throw failure('Structured startup cancelled', 'ABORTED');
       this.broker.register(id, {
         tools: options.tools ?? [], instructions: system,
@@ -150,9 +239,6 @@ export class StructuredAdapterRuntime {
         onDisconnect: () => this.fail(turn,
           failure('OpenCode disconnected while awaiting a DSH tool', 'TOOL_TRANSPORT_CLOSED')),
       });
-      const prompt = renderMessages((reusable?.messages ?? options.messages ?? [])
-        .filter(m => !['system', 'developer'].includes(m.role)));
-      if (!prompt.trim()) throw failure('No message for OpenCode', 'INVALID_REQUEST');
       const payload = {
         agent: this.client.agent, model: { providerID: this.client.backendProviderId, modelID: options.model },
         system, parts: [{ type: 'text', text: prompt }],
@@ -179,6 +265,10 @@ export class StructuredAdapterRuntime {
         if (body.info?.modelID && body.info.modelID !== options.model) {
           throw failure('OpenCode returned another model', 'MODEL_MISMATCH');
         }
+        if (body.info?.summary === true || body.info?.mode === 'compaction') {
+          throw failure('Internal OpenCode compaction cannot become the DSH reply',
+            'COMPACTION_RESPONSE_MISMATCH');
+        }
         if (this.broker.sessions.get(turn.id)?.pending.size) {
           throw failure('OpenCode completed before DSH supplied its tool result', 'EARLY_OPENCODE_FINISH');
         }
@@ -196,7 +286,10 @@ export class StructuredAdapterRuntime {
       });
       return turn;
     } catch (error) {
-      this.close(turn); throw error;
+      if (turn) this.close(turn);
+      else if (reusable) this.sessions.release(key, reusable.id);
+      else if (id) this.reclaim(id);
+      throw error;
     }
   }
 
@@ -301,6 +394,7 @@ export class StructuredAdapterRuntime {
           }
           yield* blocks.end();
           turn.reply = textOf(body.parts);
+          turn.lastUsage = consumedTokens(body.info?.tokens);
           if (body.info?.tokens) yield { type: 'usage', usage: {
             inputTokens: Number(body.info.tokens.input) || 0, outputTokens: Number(body.info.tokens.output) || 0,
           } };
@@ -319,11 +413,16 @@ export class StructuredAdapterRuntime {
 
   async dispose() {
     this.disposed = true;
+    clearInterval(this.sweeper);
     for (const turn of this.turns.values()) this.fail(turn, failure('DSH plugin stopped', 'BRIDGE_CLOSED'));
+    for (const [key, entry] of this.sessions.entries) {
+      if (entry.state === 'idle') this.sessions.retire(key);
+    }
     await this.broker.dispose();
     this.sessions.clear();
     this.terminalFailures.clear();
     await Promise.allSettled([...this.cleanup]);
+    await this.journal.drain();
   }
 }
 
