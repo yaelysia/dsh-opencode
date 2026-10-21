@@ -279,6 +279,15 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
         content: [{ type: 'text', text: '["text.txt"]' }],
       }], undefined, options);
       assert.equal(second.at(-1).reason.kind, 'stop');
+      const afterHandoff = await invoke('ptc', [ptcUser,
+        { role: 'tool', toolCallId: call.id, isError: false,
+          content: [{ type: 'text', text: '["text.txt"]' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'PTC handoff completed through DSH.' }] },
+        { role: 'user', content: [{ type: 'text', text: 'Any final observations?' }] },
+      ], undefined, options);
+      assert.equal(afterHandoff.at(-1).reason.kind, 'stop');
+      assert.equal(afterHandoff.some(c => c.type === 'tool-call-delta'), false);
+      assert.equal(adapter.runtime.sessions.entries.get(JSON.stringify(['ptc', model, 'chat']))?.state, 'idle');
       const requests = mock.records.slice(before).filter(r => r.ptc);
       assert.ok(requests.length >= 2);
       for (const request of requests) {
