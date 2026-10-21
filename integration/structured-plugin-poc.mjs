@@ -318,7 +318,7 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
         assert.ok(compactRecords.every(r => !r.advertised.includes('dsh_call')),
           'compaction must not receive DSH file or shell tooling');
       });
-      const requests = mock.records.slice(before).filter(r => r.ptc);
+      const requests = mock.records.slice(before).filter(r => r.ptc && !r.compaction);
       assert.ok(requests.length >= 2);
       for (const request of requests) {
         assert.deepEqual(request.advertised.filter(name => name === 'dsh_call'), ['dsh_call']);
