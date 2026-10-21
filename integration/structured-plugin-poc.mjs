@@ -31,13 +31,19 @@ function mockModel() {
       const body = JSON.parse(raw);
       const results = body.messages.filter(m => m.role === 'tool');
       const system = body.messages.filter(m => m.role === 'system').map(m => m.content);
-      const compaction = !(body.tools ?? []).some(t => t.function?.name === 'dsh_call')
-        && body.messages.some(m => m.role === 'user'
-          && /summariz|summary|compact|conversation history/i.test(JSON.stringify(m.content)));
+      // The native compaction prompt is the last user message and contains
+      // OpenCode's <conversation> template, even when earlier history remains.
+      const latestUser = body.messages.findLast(m => m.role === 'user');
+      const compaction = /<conversation>|<template>|<prior-summary>/i
+        .test(JSON.stringify(latestUser?.content ?? ''));
       const ptc = body.messages.some(m => m.role === 'user'
         && JSON.stringify(m.content).includes('PTC_INTEGRATION_CASE'));
       const nativeProbe = body.messages.some(m => m.role === 'user'
         && JSON.stringify(m.content).includes('DSH_NATIVE_SHELL_PROBE'));
+      if (compaction) console.info('LOCAL_COMPACTION_MODEL_REQUEST ' + JSON.stringify({
+        toolNames: (body.tools ?? []).map(t => t.function.name),
+        promptPrefix: JSON.stringify(latestUser?.content ?? '').slice(0, 130),
+      }));
       records.push({ advertised: (body.tools ?? []).map(t => t.function.name), count: results.length,
         results: results.map(m => m.content), system, ptc, nativeProbe, compaction,
         userPrompts: body.messages.filter(m => m.role === 'user').map(m => JSON.stringify(m.content)) });
@@ -124,7 +130,8 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
   const config = { endpoint: 'http://127.0.0.1:' + port, backendProviderId: 'local', models: [model],
     opencodeExecutable: path.resolve(process.env.OPENCODE_TEST_EXE), runtimeRoot: path.join(root, 'runtime'),
     autoStartTimeoutMs: process.platform === 'win32' ? 120000 : 60000,
-    timeoutMs: 20000, structuredHandoffTimeoutMs: 10000, ssePreviewEnabled: true,
+    timeoutMs: 20000, structuredHandoffTimeoutMs: 10000,
+    compactionTimeoutMs: 15000, ssePreviewEnabled: true,
   };
   const service = new StructuredOpenCodeService(config, { broker, logger: { info() {}, warn() {} },
     spawnImpl(exe, args, options) {
