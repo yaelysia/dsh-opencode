@@ -51,3 +51,18 @@ Tests:
 - This is not evidence of the cloud free gateway's reliability; real `deepseek-v4.1-flash-free` may still return HTTP 429 after tools.
 
 Follow-up: investigate provider-side post-tool 429 independently rather than replaying already executed DSH actions or bypassing provider limitations.
+
+## 2026-10-21 — Default `dsh_call` guidance with native/PTC detection
+
+Model-visible OpenCode built-in `read` is retained for free-model compatibility; execution remains prohibited by the existing backend plugin. Real Desktop users observed occasional hesitation or an attempted native tool before models corrected themselves and invoked `dsh_call`.
+
+This change strengthens the *existing* isolated `dsh-bridge` custom Agent prompt (without changing permissions) and adds reusable per-turn `structuredToolGuidance(tools)` to the bundled OpenCode plugin's `experimental.chat.system.transform` hook.
+
+- When an environmental action is required, the only valid gateway is the registered OpenCode plugin tool `dsh_call({name,arguments})`. Never attempt built-in file/shell tools first, print legacy text tool JSON, or declare success before a DSH result.
+- DSH native: `name` is one of the currently declared DSH tool names. Do not invent `run_code`.
+- DSH PTC: the visible catalog contains only `run_code`; proxy `run_code` via `dsh_call` with `code` and `description`; the program calls DSH-generated SDK bindings. No separate OpenCode PTC runtime or shell tools are introduced.
+- With no DSH tools, normal text completion is allowed, without forced tool calls.
+- Existing DSH response-language directives remain authoritative. Per-turn tool catalog and instructions still originate from DSH; the OpenCode agent prompt owns only static safety identity.
+- PTC is an optional *DSH preset*, not an automatically selected plugin mode. It is most attractive for multi-step/batch tool use, not necessarily a single file edit.
+
+Regression tests exercise static/dynamic prompt decisions, authenticated session-scoped plugin prompt injection, unchanged native-tool guard, and a published DSH BlockAssembler `run_code` proxy handoff with continuation of one OpenCode POST. A real Desktop PTC workload is still a separate manual performance/compatibility check. No new user-facing DSH setting is needed.
