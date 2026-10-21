@@ -84,7 +84,7 @@ export class StructuredAdapterRuntime {
     if (turn.closed) return;
     const terminal = afterToolFailure(error, turn.handedOff);
     turn.error = terminal;
-    if (turn.lastCallId) {
+    if (turn.lastCallId && terminal?.code === 'TOOL_CONTINUATION_FAILED') {
       // Keep the original failure for a stale retry of THIS exact tool result.
       this.terminalFailures.delete(turn.key);
       this.terminalFailures.set(turn.key, { callId: turn.lastCallId, error: terminal });
