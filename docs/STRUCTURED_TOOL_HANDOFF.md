@@ -88,3 +88,29 @@ The separate Windows `pwsh` ACL / ConstrainedLanguage / cwd issue concerns
 DSH's shell sandbox and should be reproduced using a native DSH model before
 changing this adapter or a user's filesystem ACLs. No automatic privilege
 escalation or sandbox bypass is permitted.
+
+## 2026-10-21 — Free-tier permission catalog compatibility (alpha.17)
+
+Some OpenCode free-model requests fail with `CLIENT_RESTRICTED` when a custom
+agent's deny-first permission configuration removes `bash` or `read`
+from the model-visible tool catalog. This is documented in upstream
+OpenCode issues #49433 and #50627; it is not proof that the hosted
+service accepts third-party clients, nor a blanket authorization to use it.
+
+The managed structured `dsh-bridge` agent now declares `bash: ask`
+alongside its existing `read: allow` and `dsh_call: allow`. The global
+deny-first policy is unchanged. The startup-verified
+`tool.execute.before` plugin rejects every native tool, including `bash`,
+before the built-in executor or approval logic executes. Only `dsh_call`
+can actually request host operations, where DSH remains the approval and
+execution authority. No gateway header spoofing or credential changes.
+
+A real official OpenCode 1.19.3 mock-model integration test requests a
+native bash command with `bash: ask` and checks (Windows/Linux) that:
+the model receives a bash declaration, the registered plugin denies it
+before execution or permission hang, the model continues after the denial,
+and the adapter does not forward that native intent as a DSH tool call.
+The native/structured DSH tool loops and other CI checks remain active.
+These are **offline** transport and security tests; live free gateway
+eligibility must be tested by the Desktop user. A continuing
+`CLIENT_RESTRICTED` response must be surfaced without bypass or retries.

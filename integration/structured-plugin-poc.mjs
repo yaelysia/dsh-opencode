@@ -121,10 +121,11 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
       const env = { ...options.env, OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
         OPENCODE_DISABLE_MODELS_FETCH: 'true', OPENCODE_DISABLE_CLAUDE_CODE: 'true',
         npm_config_offline: 'true', npm_config_fetch_retries: '0' }, value = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
-      // A compatibility surface experiment, never activated in production by
-      // this test-only commit. Test whether the official OpenCode hook denies
-      // native bash BEFORE an ask permission can stall the retained POST.
-      value.agent['dsh-bridge'].permission.bash = 'ask';
+      // Verify the production managed-agent permission policy, rather than
+      // mutating the policy only for this test fixture.
+      assert.equal(value.agent['dsh-bridge'].permission.bash, 'ask');
+      assert.equal(value.agent['dsh-bridge'].permission.dsh_call, 'allow');
+      assert.equal(value.permission['*'], 'deny');
       value.provider = { local: { npm: '@ai-sdk/openai-compatible', name: 'Local test only',
         options: { baseURL: 'http://127.0.0.1:' + mock.server.address().port + '/v1', apiKey: 'local-test' },
         models: { [model]: { name: model, limit: { context: 32000, output: 1024 } } } } };

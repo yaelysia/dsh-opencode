@@ -30,7 +30,14 @@ export class StructuredOpenCodeService extends OpenCodeService {
         const settings = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
         const agent = settings.agent['dsh-bridge'];
         agent.prompt = STRUCTURED_AGENT_PROMPT;
-        agent.permission = { '*': 'deny', read: 'allow', dsh_call: 'allow', external_directory: 'deny' };
+        // Free OpenCode model requests may require bash to remain declared.
+        // "ask" does NOT grant execution: the startup-verified plugin denies
+        // every native tool in tool.execute.before, including bash and read.
+        // DSH alone performs workspace actions through dsh_call.
+        agent.permission = {
+          '*': 'deny', read: 'allow', bash: 'ask',
+          dsh_call: 'allow', external_directory: 'deny',
+        };
         settings.plugin = [new URL('./opencode-dsh-tools.mjs', import.meta.url).href];
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify(settings);
         return spawnImpl(exe, args, { ...options, env });

@@ -79,8 +79,10 @@ test('actual plugin injects the catalog-specific prompt and keeps native tool gu
     assert.match(output.system[0], /PTC mode is active/);
     assert.match(output.system[0], /dsh_call with name="run_code"/);
     assert.equal(typeof hooks.tool.dsh_call.execute, 'function');
-    await assert.rejects(hooks['tool.execute.before']({ tool: 'read' }),
-      /DSH_STRUCTURED_NATIVE_TOOL_BLOCKED/);
+    for (const nativeTool of ['read', 'bash', 'shell', 'write', 'edit']) {
+      await assert.rejects(hooks['tool.execute.before']({ tool: nativeTool }),
+        /DSH_STRUCTURED_NATIVE_TOOL_BLOCKED/);
+    }
     await assert.rejects(hooks['experimental.chat.system.transform']({
       sessionID: 'missing-session',
     }, { system: [] }), /No active DSH context/);
