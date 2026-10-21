@@ -65,6 +65,7 @@ export class StructuredAdapterRuntime {
     this.busy = new Set();
     this.disposed = false;
     this.handoffTimeoutMs = config.structuredHandoffTimeoutMs ?? 600000;
+    this.compactionTimeoutMs = config.compactionTimeoutMs ?? 120000;
   }
 
   key(options) { return JSON.stringify([options.sessionId ?? '', options.model, options.purpose ?? 'chat']); }
@@ -96,8 +97,8 @@ export class StructuredAdapterRuntime {
       const result = await this.client.request(
         '/session/' + encodeURIComponent(id) + '/summarize',
         { providerID: this.client.backendProviderId, modelID: model, auto: false },
-        signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
-          : AbortSignal.timeout(120000));
+        signal ? AbortSignal.any([signal, AbortSignal.timeout(this.compactionTimeoutMs)])
+          : AbortSignal.timeout(this.compactionTimeoutMs));
       if (result !== true) throw failure('OpenCode did not confirm compaction', 'CONTEXT_COMPACTION_FAILED');
     } catch (error) {
       if (signal?.aborted) throw failure('Context compaction cancelled', 'ABORTED');
