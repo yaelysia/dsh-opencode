@@ -55,7 +55,7 @@ function mockModel() {
             }) } }] });
           frame({}, 'tool_calls');
         }
-        res.end('data: [DONE]\\n\\n');
+        res.end('data: [DONE]\n\n');
         return;
       }
       if (ptc) {
