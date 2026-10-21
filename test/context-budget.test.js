@@ -42,7 +42,7 @@ test('single oversized input is rejected without dropping DSH message history', 
   assert.equal(budget.check({ window: w, prompt: huge, system: '',
     tools: [], reused: false }).action, 'reject');
   assert.equal(budget.check({ window: w, prompt: huge, system: '',
-    tools: [], reused: true, priorTokens: 5000 }).action, 'compact');
+    tools: [], reused: true, priorTokens: 5000 }).action, 'reject');
   // The hard single-input check wins if total fresh input exceeds available budget.
   assert.ok(estimateTokens('文件') >= 2);
 });
