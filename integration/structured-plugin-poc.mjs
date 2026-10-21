@@ -272,7 +272,7 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
         String(text).includes('DSH_STRUCTURED_NATIVE_TOOL_BLOCKED'))),
       'the plugin must block bash before the OpenCode shell executes');
     });
-    await t.test('PTC system SDK is sent once and run_code crosses the real OpenCode plugin', async () => {
+    await t.test('PTC system SDK is sent once and run_code crosses the real OpenCode plugin', async t => {
       const ptcTools = [{ name: 'run_code', parameters: {
         type: 'object', properties: {
           description: { type: 'string' }, code: { type: 'string' },
