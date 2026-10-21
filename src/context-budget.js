@@ -83,7 +83,7 @@ export class ContextBudget {
     // Tool catalog is added by the OpenCode plugin, not by the DSH /message.
     const incoming = estimateTokens(prompt) + estimateTokens(system)
       + estimateTokens(tools ?? []) + 256;
-    if (!usable || (!reused && incoming >= usable)) {
+    if (!usable || incoming >= usable) {
       return { action: 'reject', incoming, usable, reason: 'single-input-too-large' };
     }
     if (reused && positive(priorTokens)) {
