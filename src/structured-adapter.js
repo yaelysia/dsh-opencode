@@ -100,6 +100,23 @@ export class StructuredAdapterRuntime {
         signal ? AbortSignal.any([signal, AbortSignal.timeout(this.compactionTimeoutMs)])
           : AbortSignal.timeout(this.compactionTimeoutMs));
       if (result !== true) throw failure('OpenCode did not confirm compaction', 'CONTEXT_COMPACTION_FAILED');
+      // /summarize can return true even when the internal assistant failed.
+      // Require a completed, nonempty summary after its synthetic compaction
+      // marker before treating the OpenCode history as reduced.
+      const history = await this.client.request(
+        '/session/' + encodeURIComponent(id) + '/message?limit=10',
+        undefined, signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+          : AbortSignal.timeout(5000), 'GET');
+      if (!Array.isArray(history)) {
+        throw failure('OpenCode returned invalid compaction history', 'CONTEXT_COMPACTION_FAILED');
+      }
+      const marker = history.findLastIndex(item => item?.info?.role === 'user'
+        && item.parts?.some(part => part?.type === 'compaction'));
+      const summary = marker >= 0 ? history.slice(marker + 1).findLast(item =>
+        item?.info?.role === 'assistant' && item.info.summary === true) : null;
+      if (!summary || summary.info.error || !summary.info.finish || !textOf(summary.parts).trim()) {
+        throw failure('OpenCode compaction produced no completed summary', 'CONTEXT_COMPACTION_FAILED');
+      }
     } catch (error) {
       if (signal?.aborted) throw failure('Context compaction cancelled', 'ABORTED');
       throw failure('OpenCode could not compact its Session (' +
