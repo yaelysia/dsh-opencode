@@ -89,9 +89,14 @@ export const DshStructuredTools = async () => {
       });
       if (!response.ok) throw new Error('No active DSH context for this OpenCode session');
       const context = await response.json();
-      output.system.push(context.instructions
-        + '\n\nCurrent DSH tool catalog:\n' + JSON.stringify(context.tools)
-        + '\n\n' + structuredToolGuidance(context.tools));
+      // /message.system already contains the DSH instructions and the PTC SDK.
+      // Do not duplicate them in this hook, especially for long PTC catalogs.
+      const guidance = 'Current DSH tool catalog:\n' + JSON.stringify(context.tools)
+        + '\n\n' + structuredToolGuidance(context.tools);
+      // OpenCode holds the original array reference; merge in place to avoid
+      // multiple system-role messages rejected by some compatible gateways.
+      output.system.splice(0, output.system.length,
+        [...output.system, guidance].filter(Boolean).join('\n\n'));
     },
   };
 };

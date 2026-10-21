@@ -2,7 +2,7 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前：0.2.0-alpha.15，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前：0.2.0-alpha.16，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
@@ -54,7 +54,7 @@ OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模�
 
 结构化模式自带 OpenCode `dsh-bridge` Agent 默认指令，明确要求模型在需要工作区操作且 DSH 提供相应能力时，**只调用已注册的 `dsh_call`**。OpenCode 原生 `read/glob/edit/shell` 等工具可能因为免费模型兼容性仍可见，但绝不允许执行；不应该先尝试这些工具，也不能把文本协议 `DSH_TOOL_CALL_V1` 当作新通道调用方式。
 
-插件还会根据**当前这一轮 DSH 真正声明的工具目录**自动注入用法，用户不需要另外维护提示词：
+插件还会根据**当前这一轮 DSH 真正声明的工具目录**自动注入用法，用户不需要另外维护提示词。alpha.16 避免将 DSH 系统指令及 PTC SDK 重复注入，并将提示词合并为单条 System 消息，以改善 OpenAI-compatible 模型网关的兼容性：
 
 - **标准模式（Native）：** `dsh_call({name: "glob", arguments: {pattern: "*.txt"}})` 等，由 DSH 处理实际工具权限、路径和执行结果。
 - **PTC 模式：** DSH 对模型只公布 `run_code`，因此调用 `dsh_call({name: "run_code", arguments: {code: "...", description: "..."}})`。程序内部再用 DSH 自动生成的 `tools.*` SDK 调用文件/检索等工具。PTC 的运行环境、沙箱与嵌套授权仍由 DSH 控制，不会移到 OpenCode。

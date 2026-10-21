@@ -66,3 +66,25 @@ This change strengthens the *existing* isolated `dsh-bridge` custom Agent prompt
 - PTC is an optional *DSH preset*, not an automatically selected plugin mode. It is most attractive for multi-step/batch tool use, not necessarily a single file edit.
 
 Regression tests exercise static/dynamic prompt decisions, authenticated session-scoped plugin prompt injection, unchanged native-tool guard, and a published DSH BlockAssembler `run_code` proxy handoff with continuation of one OpenCode POST. A real Desktop PTC workload is still a separate manual performance/compatibility check. No new user-facing DSH setting is needed.
+
+## 2026-10-21 — Consolidate OpenCode system messages for PTC compatibility (alpha.16)
+
+In the managed structured adapter, the OpenCode `/message` payload already supplies
+the current DSH system/developer instructions, including the generated PTC SDK.
+Previously the bundled plugin's `experimental.chat.system.transform` hook
+appended the same instructions a second time via `output.system.push(...)`.
+This doubled PTC SDK text and produced multiple `system` messages, which some
+OpenAI-compatible backends reject.
+
+The plugin now appends only the current tool catalog and the native/PTC routing
+guidance, **in place** into one assembled system string. DSH instructions still
+enter through `/message.system` at their original authority. Neither tool
+permissions nor DSH sandboxing change. Tests cover single-system injection,
+PTC SDK marker uniqueness and a real OpenCode 1.19.3 mock-provider PTC
+`dsh_call(run_code)` round-trip (outer bridge only). Real Desktop PTC execution
+of generated TypeScript is not claimed by this test.
+
+The separate Windows `pwsh` ACL / ConstrainedLanguage / cwd issue concerns
+DSH's shell sandbox and should be reproduced using a native DSH model before
+changing this adapter or a user's filesystem ACLs. No automatic privilege
+escalation or sandbox bypass is permitted.

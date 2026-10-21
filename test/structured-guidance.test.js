@@ -68,10 +68,13 @@ test('actual plugin injects the catalog-specific prompt and keeps native tool gu
       onCall() {},
     });
     const hooks = await DshStructuredTools();
-    const output = { system: [] };
+    const dshPrompt = 'User language: 简体中文。Use DSH tools only. PTC_SDK_SENTINEL';
+    const output = { system: ['OpenCode agent prompt.\n' + dshPrompt] };
     await hooks['experimental.chat.system.transform']({ sessionID: 'session-ptc' }, output);
-    assert.equal(output.system.length, 1);
+    assert.equal(output.system.length, 1, 'the hook must not create a second system-role message');
     assert.match(output.system[0], /User language: 简体中文/);
+    assert.equal(output.system[0].split('PTC_SDK_SENTINEL').length - 1, 1,
+      'DSH prompt and PTC SDK are already supplied by the OpenCode message system field');
     assert.match(output.system[0], /"name":"run_code"/);
     assert.match(output.system[0], /PTC mode is active/);
     assert.match(output.system[0], /dsh_call with name="run_code"/);
@@ -82,10 +85,12 @@ test('actual plugin injects the catalog-specific prompt and keeps native tool gu
       sessionID: 'missing-session',
     }, { system: [] }), /No active DSH context/);
     broker.update('session-ptc', native, 'Use the DSH native presentation.');
-    const nativeOutput = { system: [] };
+    const nativeOutput = { system: ['OpenCode agent prompt.\nDSH_NATIVE_SENTINEL'] };
     await hooks['experimental.chat.system.transform']({
       sessionID: 'session-ptc',
     }, nativeOutput);
+    assert.equal(nativeOutput.system.length, 1);
+    assert.equal(nativeOutput.system[0].split('DSH_NATIVE_SENTINEL').length - 1, 1);
     assert.match(nativeOutput.system[0], /DSH native tool presentation is active/);
     assert.doesNotMatch(nativeOutput.system[0], /PTC mode is active/);
     assert.match(nativeOutput.system[0], /"name":"glob"/);

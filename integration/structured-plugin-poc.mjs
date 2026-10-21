@@ -30,14 +30,34 @@ function mockModel() {
       let raw = ''; for await (const data of req) raw += data;
       const body = JSON.parse(raw);
       const results = body.messages.filter(m => m.role === 'tool');
+      const system = body.messages.filter(m => m.role === 'system').map(m => m.content);
+      const ptc = body.messages.some(m => m.role === 'user'
+        && JSON.stringify(m.content).includes('PTC_INTEGRATION_CASE'));
       records.push({ advertised: body.tools.map(t => t.function.name), count: results.length,
-        results: results.map(m => m.content) });
+        results: results.map(m => m.content), system, ptc });
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const frame = (delta, finish_reason = null) => res.write('data: ' + JSON.stringify({
         id: 'chat-local', object: 'chat.completion.chunk', created: 1760000000, model,
         choices: [{ index: 0, delta, finish_reason }],
       }) + '\n\n');
       frame({ role: 'assistant' });
+      if (ptc) {
+        if (results.length) {
+          frame({ content: 'PTC handoff completed through DSH.' });
+          frame({}, 'stop');
+        } else {
+          frame({ tool_calls: [{ index: 0, id: 'call_mock_ptc', type: 'function',
+            function: { name: 'dsh_call', arguments: JSON.stringify({
+              name: 'run_code', arguments: {
+                description: 'Find matching text files using the SDK',
+                code: 'return await tools.glob({pattern:"*.txt"})',
+              },
+            }) } }] });
+          frame({}, 'tool_calls');
+        }
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       const denied = results.some(m => JSON.stringify(m.content).includes('User denied the tool request'));
       if (results.length >= 3 || denied) {
         frame({ content: denied ? '用户拒绝，未修改文件。' : '已完成，由 DSH 修改。' });
@@ -100,9 +120,9 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
     if (options?.method === 'POST' && url.endsWith('/message')) messagePosts++;
     return originalFetch(url, options);
   };
-  const invoke = async (sessionId, messages, signal) => {
+  const invoke = async (sessionId, messages, signal, extra = {}) => {
     const prepared = await adapter.prepareCall(provider, model);
-    return consume(prepared.stream({ provider, model, sessionId, tools, messages, signal }));
+    return consume(prepared.stream({ provider, model, sessionId, tools, messages, signal, ...extra }));
   };
   const user = { role: 'user', content: [{ type: 'text', text: 'Find, read and append to text.txt in the DSH workspace.' }] };
   try {
@@ -171,7 +191,42 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
       }])));
       assert.equal(broker.calls.size, 0); assert.equal(adapter.runtime.turns.size, 0);
     });
+    await t.test('PTC system SDK is sent once and run_code crosses the real OpenCode plugin', async () => {
+      const ptcTools = [{ name: 'run_code', parameters: {
+        type: 'object', properties: {
+          description: { type: 'string' }, code: { type: 'string' },
+        }, required: ['description', 'code'],
+      } }];
+      const ptcPrompt = 'PTC_SDK_SENTINEL: within run_code use await tools.glob(args).';
+      const options = { tools: ptcTools, system: ptcPrompt };
+      const ptcUser = { role: 'user', content: [
+        { type: 'text', text: 'PTC_INTEGRATION_CASE: list .txt files' },
+      ] };
+      const before = mock.records.length;
+      const first = await invoke('ptc', [ptcUser], undefined, options);
+      const call = first.find(c => c.type === 'tool-call-delta');
+      assert.equal(first.at(-1).reason.kind, 'tool-calls');
+      assert.equal(call.name, 'run_code');
+      const args = JSON.parse(call.argumentsDelta);
+      assert.match(args.code, /await tools.glob/);
+      const second = await invoke('ptc', [ptcUser, {
+        role: 'tool', toolCallId: call.id, isError: false,
+        content: [{ type: 'text', text: '["text.txt"]' }],
+      }], undefined, options);
+      assert.equal(second.at(-1).reason.kind, 'stop');
+      const requests = mock.records.slice(before).filter(r => r.ptc);
+      assert.ok(requests.length >= 2);
+      for (const request of requests) {
+        assert.deepEqual(request.advertised.filter(name => name === 'dsh_call'), ['dsh_call']);
+        assert.equal(request.system.length, 1, 'one system message for compatible gateways');
+        assert.equal(request.system[0].split('PTC_SDK_SENTINEL').length - 1, 1,
+          'do not repeat the generated DSH PTC SDK through the plugin hook');
+        assert.match(request.system[0], /DSH PTC mode is active/);
+      }
+    });
     assert.ok(mock.records.length >= 7);
+    assert.ok(mock.records.every(r => r.system.length === 1),
+      'managed OpenCode may not generate extra system-role messages');
     assert.ok(mock.records.every(r => r.advertised.includes('dsh_call')));
     console.info('STRUCTURED_POC_SUMMARY ' + JSON.stringify({
       officialOpenCode: '1.19.3', cloudRequests: 0, sequence: ['glob', 'read', 'edit'],
