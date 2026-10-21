@@ -133,3 +133,17 @@ An earlier Windows PTC/pwsh error was traced by the user to directory ACL
 conflicts with the DSH Low Integrity sandbox. Selecting an alternative
 DSH installation directory resolved it; this is independent of the
 plugin tool call boundary. No ACL mutations or sandbox bypass are made.
+
+## 2026-10-21 — Alpha.20 context and owned Session lifecycle
+
+Built on alpha.19 Session reuse. The DSH-side adapter alone owns model-budget checks,
+OpenCode native /summarize orchestration and post-turn Session retirement. The
+OpenCode-side plugin keeps existing dsh_call execution isolation unchanged.
+Model limits are read from /provider, not hard-coded; estimates are a preflight
+signal, not authoritative tokenizer counts. No DSH history rewriting/truncation.
+A compaction request temporarily registers a **zero-tool** broker catalog;
+its internal assistant events must not be rendered as DSH replies.
+A small process-scoped journal of opaque owned Session IDs supports
+conservative orphan cleanup after restarts. Only idle/owned Sessions are
+deleted; pending tool handoffs are never candidates. Failed cleanup retains
+the journal entry. Real gateway compatibility requires field acceptance.
