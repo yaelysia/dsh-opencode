@@ -56,6 +56,8 @@ export class OpenCodeService {
     this.guardedRead = config.guardedReadCompatibility === true;
     this.logger = deps.logger || console;
     this.env = deps.env || process.env;
+    this.runtimeRoot = path.resolve(config.runtimeRoot || path.join(
+      this.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'OpenCodeRuntime'));
     // An unguessable local server password belongs to this plugin instance only.
     this.ownedPassword = randomBytes(32).toString('hex');
     this.platform = deps.platform || process.platform;
@@ -205,8 +207,7 @@ export class OpenCodeService {
       throw failure('OpenCode server cannot start: ' + origin +
         ' is occupied but its health check failed', 'SERVER_PORT_BUSY');
     }
-    const root = path.resolve(this.config.runtimeRoot || path.join(
-      this.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'OpenCodeRuntime'));
+    const root = this.runtimeRoot;
     const exe = installedExecutable(this.config, this.env, this.platform);
     if (path.isAbsolute(exe)) {
       try { await this.accessImpl(exe); }
