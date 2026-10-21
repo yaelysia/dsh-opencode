@@ -2,6 +2,7 @@ import { createAdapter, OpenCodeServeClient, renderMessages } from './bridge.js'
 import { failure, providerFailure } from './errors.js';
 import { openSessionEvents } from './opencode-events.js';
 import { StructuredEventFeed, StructuredBlocks } from './structured-events.js';
+import { StructuredSessionRegistry } from './structured-session.js';
 
 function textOf(content) {
   if (typeof content === 'string') return content;
@@ -44,6 +45,7 @@ export class StructuredAdapterRuntime {
     this.broker = broker;
     this.client = new OpenCodeServeClient(config, fetchImpl);
     this.turns = new Map();
+    this.sessions = new StructuredSessionRegistry();
     this.terminalFailures = new Map();
     this.busy = new Set();
     this.cleanup = new Set();
@@ -105,6 +107,13 @@ export class StructuredAdapterRuntime {
     this.broker.unregister(turn.id);
     turn.controller.abort();
     turn.events?.close();
+    if (turn.dshSessionId) {
+      if (turn.completed && turn.finished && !turn.error) {
+        this.sessions.complete(turn.key, turn.id, turn.dshMessages, turn.system, turn.reply);
+      } else {
+        this.sessions.invalidate(turn.key, turn.id);
+      }
+    }
     if (this.turns.get(turn.key) === turn) this.turns.delete(turn.key);
     if (!turn.finished) {
       const stop = this.client.request('/session/' + encodeURIComponent(turn.id) + '/abort', {},
@@ -118,16 +127,20 @@ export class StructuredAdapterRuntime {
     await this.client.ensureService?.({ requireManaged: true });
     await this.broker.start();
     if (this.disposed || options.signal?.aborted) throw failure('Structured startup cancelled', 'ABORTED');
-    const id = await this.client.createSession(options.signal);
-    const turn = { id, key: this.key(options), queue: [], wake: null,
+    const key = this.key(options);
+    const system = instructions(options);
+    const reusable = options.sessionId ? this.sessions.plan(key, options.messages ?? [], system) : null;
+    const id = reusable?.id ?? await this.client.createSession(options.signal);
+    const turn = { id, key, queue: [], wake: null, dshSessionId: options.sessionId,
+      dshMessages: options.messages ?? [], system, reply: '', completed: false,
       controller: new AbortController(), timer: null, waiting: null, streaming: false,
       closed: false, finished: false, error: null, delivered: new Map(),
       handedOff: false, lastCallId: null };
-    this.turns.set(turn.key, turn);
+    if (options.sessionId) this.sessions.active(key, id);
+    this.turns.set(key, turn);
     this.bindSignal(turn, options.signal);
     try {
       if (this.disposed || turn.closed) throw failure('Structured startup cancelled', 'ABORTED');
-      const system = instructions(options);
       this.broker.register(id, {
         tools: options.tools ?? [], instructions: system,
         onCall: call => {
@@ -137,7 +150,8 @@ export class StructuredAdapterRuntime {
         onDisconnect: () => this.fail(turn,
           failure('OpenCode disconnected while awaiting a DSH tool', 'TOOL_TRANSPORT_CLOSED')),
       });
-      const prompt = renderMessages((options.messages ?? []).filter(m => !['system', 'developer'].includes(m.role)));
+      const prompt = renderMessages((reusable?.messages ?? options.messages ?? [])
+        .filter(m => !['system', 'developer'].includes(m.role)));
       if (!prompt.trim()) throw failure('No message for OpenCode', 'INVALID_REQUEST');
       const payload = {
         agent: this.client.agent, model: { providerID: this.client.backendProviderId, modelID: options.model },
@@ -219,12 +233,18 @@ export class StructuredAdapterRuntime {
       }
       this.bindSignal(turn, options.signal);
       if (turn.closed) throw turn.error;
-      this.broker.update(turn.id, options.tools ?? [], instructions(options));
-      this.broker.settle(turn.id, turn.waiting.id, {
-        isError: result.isError === true, content: result.content ?? [],
-      });
-      turn.waiting = null;
-      this.arm(turn, this.client.timeoutMs, 'TIMEOUT');
+      try {
+        this.broker.update(turn.id, options.tools ?? [], instructions(options));
+        this.broker.settle(turn.id, turn.waiting.id, {
+          isError: result.isError === true, content: result.content ?? [],
+        });
+        turn.dshMessages = options.messages ?? [];
+        turn.waiting = null;
+        this.arm(turn, this.client.timeoutMs, 'TIMEOUT');
+      } catch (error) {
+        this.close(turn);
+        throw error;
+      }
     } else {
       if (options.messages?.at(-1)?.role === 'tool') {
         const prior = this.terminalFailures.get(key);
@@ -259,6 +279,7 @@ export class StructuredAdapterRuntime {
             continue;
           }
           turn.waiting = event.call;
+          if (turn.dshSessionId) this.sessions.waiting(turn.key, turn.id);
           turn.lastCallId = event.call.id;
           turn.handedOff = true;
           this.arm(turn, this.handoffTimeoutMs, 'TOOL_RESULT_TIMEOUT');
@@ -279,9 +300,11 @@ export class StructuredAdapterRuntime {
             yield* blocks.part({ ...part, id: part.id ?? 'final-' + i });
           }
           yield* blocks.end();
+          turn.reply = textOf(body.parts);
           if (body.info?.tokens) yield { type: 'usage', usage: {
             inputTokens: Number(body.info.tokens.input) || 0, outputTokens: Number(body.info.tokens.output) || 0,
           } };
+          turn.completed = true;
           yield { type: 'finish', reason: { kind: body.info?.finish === 'length' ? 'max-tokens' : 'stop' } };
           return;
         }
@@ -298,6 +321,7 @@ export class StructuredAdapterRuntime {
     this.disposed = true;
     for (const turn of this.turns.values()) this.fail(turn, failure('DSH plugin stopped', 'BRIDGE_CLOSED'));
     await this.broker.dispose();
+    this.sessions.clear();
     this.terminalFailures.clear();
     await Promise.allSettled([...this.cleanup]);
   }
