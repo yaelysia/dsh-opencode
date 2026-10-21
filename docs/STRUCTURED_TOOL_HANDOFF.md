@@ -114,3 +114,22 @@ The native/structured DSH tool loops and other CI checks remain active.
 These are **offline** transport and security tests; live free gateway
 eligibility must be tested by the Desktop user. A continuing
 `CLIENT_RESTRICTED` response must be surfaced without bypass or retries.
+
+## 2026-10-21 — Pinned official OpenCode CLI (alpha.18)
+
+A second Windows machine lost its manually installed CLI and the old
+hardcoded default yielded SERVER_NOT_INSTALLED. The plugin now depends
+on opencode-ai@1.19.3 and locates the official platform binary directly
+through that package's optional dependencies, including when its install
+script is disabled by the package manager. The native executable is
+version-checked and pinned independently of global/Desktop OpenCode.
+
+Manual opencodeExecutable/OPENCODE_EXECUTABLE paths retain priority.
+Missing or inconsistent bundled dependencies fail closed; no runtime
+download or unverified fallback to a different OpenCode installation.
+Windows/Linux offline binary and structured tool integration tests pass.
+
+An earlier Windows PTC/pwsh error was traced by the user to directory ACL
+conflicts with the DSH Low Integrity sandbox. Selecting an alternative
+DSH installation directory resolved it; this is independent of the
+plugin tool call boundary. No ACL mutations or sandbox bypass are made.

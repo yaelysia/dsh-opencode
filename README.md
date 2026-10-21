@@ -2,11 +2,11 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前：0.2.0-alpha.17，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前：0.2.0-alpha.18，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
-环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）、Node.js >=22.19.0，以及已安装的 OpenCode 官方 CLI（当前验证 1.19.3）。插件会发现已有 CLI；**本版本不负责下载或安装 CLI 本身**。
+环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）及 Node.js >=22.19.0。**无需独立安装 OpenCode CLI**：本插件固定依赖官方 `opencode-ai@1.19.3`，安装时由 DSH 包管理器一并获取对应的平台二进制。运行时不会自行下载或升级。
 
 在 DSH 插件页以 Git 来源安装：
 
@@ -18,9 +18,17 @@ git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
 
 进入 **插件 → 已安装插件 → dsh-opencode**，配置表单直接显示在详情页。开启 **「结构化工具通道（实验）」**，保存并重启后即可使用新通道；需要实时预览时同时打开「SSE 流式输出预览」。默认模型列表提供 `deepseek-v4.1-flash-free`、`glm-5.3-flash-free`，是否可用仍取决于 OpenCode 网关、账户与网络。
 
-**不需要**另外安装 OpenCode 插件、修改 OpenCode 配置文件、手动运行启动命令或清理 YAML。DSH 插件自动完成后台插件装载、回环通信端口分配、随机认证、隔离 Agent 配置和子进程管理。退出/卸载会释放等待的工具回调并停止自身进程，不终止未知外部进程。
+**不需要**另外安装 OpenCode CLI/插件、修改 OpenCode 配置文件、手动运行启动命令或清理 YAML。DSH 插件自动完成固定版本 CLI 解析、后台插件装载、回环通信端口分配、随机认证、隔离 Agent 配置和子进程管理。退出/卸载会释放等待的工具回调并停止自身进程，不终止未知外部进程。
 
-如果旧的手动服务仍占用 `127.0.0.1:4096`，插件不会擅自接管它；关闭那一个已知旧服务后再让 DSH 自动启动。Windows 默认查找 `%LOCALAPPDATA%\Programs\OpenCodeCLI\opencode.exe`，也可在 DSH 高级配置中指定路径。
+如果旧的手动服务仍占用 `127.0.0.1:4096`，插件不会擅自接管它；关闭那一个已知旧服务后再让 DSH 自动启动。默认直接使用插件依赖中的固定版本 CLI，不依赖 `%LOCALAPPDATA%\Programs\OpenCodeCLI`、OpenCode Desktop 或 PATH。仅当配置 `opencodeExecutable` 或 `OPENCODE_EXECUTABLE` 时，才使用外部 CLI（版本兼容性由用户自行维护）。
+
+## 内置固定版本 OpenCode CLI
+
+`opencode-ai@1.19.3` 作为普通运行依赖，其官方可选依赖提供各平台原生二进制。插件直接解析二进制，不依赖全局 npm shim、手工硬链接或安装后脚本；x64 优先使用 baseline 变体以兼容不支持 AVX2 的 CPU。
+
+安装或更新插件时需要包管理器能获取 npm 依赖，首次安装会增加 CLI 下载体积。插件运行时不会自动下载或升级。若 CLI 可选依赖缺失或版本不一致，将明确报错，不会偷偷使用全局 OpenCode 或 Desktop 内置版本。已安装的旧插件请更新/重装后完整退出并重启 DSH。
+
+**Windows 安装目录提醒：** 曾有 DSH 安装目录的文件 ACL 与 Windows 低完整性沙箱冲突，造成 PTC Worker 和 `pwsh` 权限异常。该案例通过将 DSH 安装到非原默认目录得到解决，与 `dsh_call` 无关。遇到类似 `EPERM` 请先检查安装目录权限，不要递归重置系统目录 ACL，也不要长期关闭沙箱。
 
 ## 新通道如何交接工具
 
@@ -77,7 +85,7 @@ OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模�
 | `autoStart` | `true` | 旧通道的自动启动开关；新通道始终自动启动 |
 | `autoStartDirect` | `true` | 仅为子进程清除 HTTP(S)/ALL_PROXY，不修改系统 VPN/TUN |
 | `endpoint` | `http://127.0.0.1:4096` | 模型服务地址；托管模式要求本机回环 HTTP |
-| `opencodeExecutable` / `runtimeRoot` | 自动 | CLI 路径 / 独立运行目录 |
+| `opencodeExecutable` / `runtimeRoot` | 自动 | 默认使用插件固定依赖的 1.19.3 CLI；填入外部 CLI 路径则覆盖 / 独立运行目录 |
 | `timeoutMs` / `autoStartTimeoutMs` | `120000` / `15000` | 模型生成 / 服务启动超时，单位毫秒 |
 | `username` / `passwordEnv` | `opencode` / `OPENCODE_SERVER_PASSWORD` | 认证设置；托管服务始终生成随机密码 |
 | `models` | 两个默认模型 ID | 可编辑列表；列表出现不代表网关已授权使用 |
@@ -97,7 +105,9 @@ OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模�
 | 错误 | 含义 |
 | --- | --- |
 | `SERVER_PORT_BUSY` / `UNTRUSTED_OPENCODE_SERVER` | 端口由其他服务占用，不能接管 |
-| `SERVER_NOT_INSTALLED` | 未找到 CLI，在 DSH 高级配置中选择已安装文件 |
+| `SERVER_BUNDLED_CLI_MISSING` / `SERVER_BUNDLED_CLI_INVALID` | 官方 CLI 包未正确安装或版本不一致；更新/重装插件并保留可选依赖 |
+| `SERVER_BUNDLED_CLI_UNSUPPORTED` | 当前系统或 CPU 架构没有受支持的官方 CLI 包 |
+| `SERVER_NOT_INSTALLED` | 显式指定的外部 CLI 文件不存在；检查 `opencodeExecutable` |
 | `SERVER_GUARD_NOT_READY` | 后台插件未完成启动证明，拒绝继续模型请求 |
 | `CLIENT_RESTRICTED` / `NETWORK_BLOCKED` / `RATE_LIMIT` | 上游网关拒绝或限流。部分官方 OpenCode 客户端也会因 `read/bash` 工具不在请求目录、账号或网络条件触发 `CLIENT_RESTRICTED`；alpha.17 仅修正本插件的受限 Agent 工具声明，不保证所有免费账户/网络可用，也不会绕过服务端拒绝 |
 | `TOOL_RESULT_REQUIRED` / `TOOL_RESULT_MISMATCH` | DSH 返回结果与当前等待的调用 ID 不符，不能重放 |
