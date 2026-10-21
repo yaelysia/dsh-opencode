@@ -5,6 +5,7 @@ export class StructuredEventFeed {
     this.publish = publish;
     this.fail = fail;
     this.assistants = new Set();
+    this.hiddenAssistants = new Set();
     this.parts = new Map();
   }
   accept(raw) {
@@ -14,7 +15,17 @@ export class StructuredEventFeed {
     const sid = p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID;
     if (sid !== this.sessionID) return;
     if (event.type === 'message.updated') {
-      if (p.info?.role === 'assistant') this.assistants.add(p.info.id);
+      if (p.info?.role === 'assistant' && typeof p.info.id === 'string') {
+        // OpenCode's internal summary is an assistant message too, but must
+        // never appear as a DSH user-visible reasoning/text block.
+        if (p.info.summary === true || p.info.mode === 'compaction') {
+          this.hiddenAssistants.add(p.info.id);
+          this.assistants.delete(p.info.id);
+          for (const [id, part] of this.parts) {
+            if (part.messageID === p.info.id) this.parts.delete(id);
+          }
+        } else if (!this.hiddenAssistants.has(p.info.id)) this.assistants.add(p.info.id);
+      }
       return;
     }
     if (event.type === 'message.part.updated') {
@@ -24,7 +35,8 @@ export class StructuredEventFeed {
           || (part.tool !== 'dsh_call' && part.state?.status === 'completed')) this.fail();
         return;
       }
-      if (!['text', 'reasoning'].includes(part?.type) || !this.assistants.has(part.messageID)
+      if (!['text', 'reasoning'].includes(part?.type) || this.hiddenAssistants.has(part.messageID)
+        || !this.assistants.has(part.messageID)
         || typeof part.id !== 'string' || typeof part.text !== 'string') return;
       this.parts.set(part.id, { id: part.id, messageID: part.messageID, type: part.type, text: part.text });
       this.publish({ ...this.parts.get(part.id) });
