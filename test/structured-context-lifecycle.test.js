@@ -38,6 +38,13 @@ async function fixture({ compactResponse = true, limits = { context: 8192, input
       actions.push({ type: 'compact', id, payload: JSON.parse(options.body) });
       return Response.json(compactResponse);
     }
+    if (route.endsWith('/message') && method === 'GET') {
+      return Response.json([
+        { info: { role: 'user' }, parts: [{ type: 'compaction' }] },
+        { info: { role: 'assistant', summary: true, finish: 'stop' },
+          parts: [{ type: 'text', text: 'Verified mock summary' }] },
+      ]);
+    }
     if (route.endsWith('/message')) {
       const payload = JSON.parse(options.body);
       actions.push({ type: 'message', id, text: payload.parts[0].text });
