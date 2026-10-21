@@ -52,6 +52,7 @@ test('session registry records lifecycle states and never replays a completed in
   assert.equal(registry.entries.get('a').state, 'idle');
   assert.deepEqual(registry.plan('a', [user('one'), assistant('answer-one'), user('two')], 'system'),
     { id: 'oc-a', messages: [user('two')], lastUsage: null });
+  registry.release('a', 'oc-a'); // A planned lease must be returned before another input.
   assert.throws(() => registry.plan('a', [user('one'), assistant('answer-one')], 'system'),
     error => error.code === 'STALE_DSH_TURN');
   registry.active('b', 'oc-b');
