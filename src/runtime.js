@@ -14,6 +14,7 @@ export function createPluginRuntime(config, deps = {}) {
     ? new StructuredOpenCodeService(options, { ...deps, broker })
     : new OpenCodeService(options, deps);
   const settings = { ...options,
+    ...(structured ? { sessionJournalRoot: supervisor.runtimeRoot } : {}),
     passwordProvider: () => supervisor.passwordForClient(),
     verifyNativeDenials: parts => supervisor.verifiedNativeDenials(parts),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
