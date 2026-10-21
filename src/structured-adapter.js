@@ -177,7 +177,8 @@ export class StructuredAdapterRuntime {
         AbortSignal.timeout(2000)).then(() => this.reclaim(turn.id)).catch(() => {})
         .finally(() => this.cleanup.delete(stop));
       this.cleanup.add(stop);
-    } else if (!turn.completed || turn.error) {
+    } else if (!turn.completed || turn.error || !turn.dshSessionId) {
+      // Anonymous requests have no DSH identity to bind across turns.
       this.reclaim(turn.id);
     }
   }
