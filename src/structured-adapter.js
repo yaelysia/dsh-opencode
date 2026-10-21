@@ -127,8 +127,9 @@ export class StructuredAdapterRuntime {
     this.bindSignal(turn, options.signal);
     try {
       if (this.disposed || turn.closed) throw failure('Structured startup cancelled', 'ABORTED');
+      const system = instructions(options);
       this.broker.register(id, {
-        tools: options.tools ?? [], instructions: instructions(options),
+        tools: options.tools ?? [], instructions: system,
         onCall: call => {
           this.arm(turn, this.handoffTimeoutMs, 'TOOL_RESULT_TIMEOUT');
           this.publish(turn, { kind: 'call', call });
@@ -140,7 +141,7 @@ export class StructuredAdapterRuntime {
       if (!prompt.trim()) throw failure('No message for OpenCode', 'INVALID_REQUEST');
       const payload = {
         agent: this.client.agent, model: { providerID: this.client.backendProviderId, modelID: options.model },
-        system: instructions(options), parts: [{ type: 'text', text: prompt }],
+        system, parts: [{ type: 'text', text: prompt }],
       };
       if (this.config.ssePreviewEnabled) {
         const feed = new StructuredEventFeed(id, part => this.publish(turn, { kind: 'part', part }),

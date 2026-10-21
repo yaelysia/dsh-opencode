@@ -126,17 +126,19 @@ export class OpenCodeService {
       this.env[this.config.passwordEnv || 'OPENCODE_SERVER_PASSWORD'];
   }
 
+  /** Reuse one Basic Auth header path for health and agent lookup. */
+  headers() {
+    const password = this.passwordForClient();
+    if (!password) return {};
+    const username = this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode';
+    return { authorization: 'Basic ' + Buffer.from(username + ':' + password).toString('base64') };
+  }
+
   async health() {
     if (!this.target) return false;
-    const headers = {};
-    const password = this.passwordForClient();
-    if (password) {
-      const username = this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode';
-      headers.authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
-    }
     try {
       const response = await this.fetchImpl(this.target.origin + '/global/health', {
-        method: 'GET', headers, redirect: 'error',
+        method: 'GET', headers: this.headers(), redirect: 'error',
         signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(900)]),
       });
       if (!response.ok) return false;
@@ -149,16 +151,10 @@ export class OpenCodeService {
   async assertAgentPresent() {
     const agent = this.agent;
     if (!this.target) return;
-    const headers = {};
-    const password = this.passwordForClient();
-    if (password) {
-      const username = this.config.username || this.env.OPENCODE_SERVER_USERNAME || 'opencode';
-      headers.authorization = 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
-    }
     let response;
     try {
       response = await this.fetchImpl(this.target.origin + '/agent', {
-        method: 'GET', headers, redirect: 'error',
+        method: 'GET', headers: this.headers(), redirect: 'error',
         signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(5000)]),
       });
     } catch (error) {
