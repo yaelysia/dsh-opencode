@@ -2,7 +2,7 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前：0.2.0-alpha.18，实验版本，PR #1 尚未合并。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前：0.2.0-alpha.18，实验版本。** 新增原生 `dsh_call` 结构化通道，旧通道默认保留。官方 OpenCode 1.19.3 + 本地模拟模型已能验证完整工具交接；真实免费模型网关和 DSH Desktop 审批界面仍需实测。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
@@ -11,7 +11,7 @@
 在 DSH 插件页以 Git 来源安装：
 
 ```text
-git+https://github.com/yaelysia/dsh-opencode.git#feat/native-opencode-provider
+git+https://github.com/yaelysia/dsh-opencode.git#master
 ```
 
 复现某个版本时，将分支名换成完整提交 SHA。更新后完整退出并重启 DSH Desktop。
