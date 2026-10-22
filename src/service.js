@@ -10,6 +10,7 @@ import { childEnvironment, secureServerEnvironment } from './service-env.js';
 import { BRIDGE_AGENT_ID, managedAgentEnvironment, requireBridgeAgent } from './managed-agent.js';
 import { failure } from './errors.js';
 import { bundledExecutable } from './opencode-binary.js';
+import { zenEnvironmentHints } from './zen-access.js';
 
 const START_TIMEOUT_MS = 15_000;
 const CHECK_INTERVAL_MS = 250;
@@ -336,6 +337,10 @@ export class OpenCodeService {
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
     }
+    // A bundled official CLI does not imply an authenticated/eligible account.
+    // Report credential presence and proxy policy only; never read auth data.
+    this.diagnosticEvent?.('provider', 'zen.environment',
+      zenEnvironmentHints(childEnv, { direct: this.config.autoStartDirect !== false }));
     const cwd = path.join(root, 'workspace');
     await this.mkdirImpl(cwd, { recursive: true });
     this.controller.signal.throwIfAborted();
