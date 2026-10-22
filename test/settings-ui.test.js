@@ -72,6 +72,8 @@ test('the installed bundle ships a prebuilt DSH browser half without prepare scr
     '@deepseek-ai/dsh-client-locale',
     '@deepseek-ai/dsh-client-ui-settings',
     '@deepseek-ai/dsh-client-ui-plugin-manager',
+    '@deepseek-ai/dsh-client-ui-conversation',
+    '@deepseek-ai/dsh-client-ui-sidebar-right',
   ]);
   assert.equal(manifest.scripts?.prepare, undefined);
 });
