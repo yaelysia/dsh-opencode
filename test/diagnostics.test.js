@@ -138,3 +138,15 @@ test('native DSH tool broker emits rejected and duplicated requests without argu
   assert.doesNotMatch(output, /SECRET|workspace\/file|dsh-private|Bearer invalid/);
   assert.ok(hub.events().some(e => e.session === sessionKey('dsh-private')));
 });
+
+test('Zen environment log preserves only classification labels, never identity or authentication content', () => {
+  const hub = new DiagnosticHub({ enabled: false });
+  const record = hub.record('provider', 'zen.environment', {
+    authSource: 'local-file', proxyMode: 'proxy-vars-cleared',
+    OPENCODE_API_KEY: 'SUPER_PRIVATE_API_KEY', password: 'do-not-log',
+    authContent: '{"opencode":{"key":"PRIVATE"}}',
+  });
+  assert.deepEqual(record.data, { authSource: 'local-file', proxyMode: 'proxy-vars-cleared' });
+  assert.equal(JSON.stringify(hub.events()).includes('SUPER_PRIVATE'), false);
+  assert.equal(JSON.stringify(hub.events()).includes('PRIVATE'), false);
+});
