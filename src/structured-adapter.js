@@ -61,6 +61,7 @@ export class StructuredAdapterRuntime {
       onRetire: id => this.reclaim(id),
       onEvent: (code, data) => {
         this.trace('session', code, data, code === 'retired' ? 'debug' : 'info');
+        if (code === 'retired') this.contextState(data.sessionId, { used: null, phase: 'unknown' });
         this.refreshCounts();
       },
       maxIdle: 32,
@@ -83,6 +84,7 @@ export class StructuredAdapterRuntime {
     // Invalidate every in-memory upstream identity before its process is killed.
     // Retained DSH tool calls remain terminal: never restart their POSTs.
     for (const turn of [...this.turns.values()]) {
+      this.contextState(turn.dshSessionId, { used: null, phase: 'unknown' });
       this.fail(turn, failure('Managed OpenCode became unresponsive; current turn cannot be replayed',
         'TRANSPORT'));
     }
