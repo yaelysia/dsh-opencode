@@ -60,25 +60,30 @@ export class StructuredSessionRegistry {
     if (entry.state !== 'idle' || !Array.isArray(messages) || entry.system !== system
       || messages.length < entry.count
       || digest(messages.slice(0, entry.count)) !== entry.checkpoint) {
-      this.retire(key);
+      const reason = entry.state !== 'idle' ? 'not-idle' :
+        entry.system !== system ? 'instructions-changed' :
+          !Array.isArray(messages) || messages.length < entry.count
+            ? 'history-truncated' : 'history-changed';
+      this.retire(key, reason);
       return null;
     }
     const suffix = messages.slice(entry.count);
     let offset = 0;
     if (suffix[0]?.role === 'assistant') {
       if (hasToolCall(suffix[0]) || digest(visibleText(suffix[0].content)) !== entry.replyHash) {
-        this.retire(key);
+        this.retire(key, 'assistant-echo-changed');
         return null;
       }
       offset = 1;
     }
     if (suffix.length === offset) {
+      this.notify('stale-turn', key, entry, 'duplicate-completed-input');
       throw failure('No new DSH user turn after the completed OpenCode response', 'STALE_DSH_TURN');
     }
     const newMessages = suffix.slice(offset);
     if (newMessages.length !== 1 || newMessages[0]?.role !== 'user'
       || newMessages[0]?.source?.kind === 'agent-instructions') {
-      this.retire(key);
+      this.retire(key, 'unsupported-dsh-delta');
       return null;
     }
     // Reserve synchronously before the first await; the TTL collector must not
