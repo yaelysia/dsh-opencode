@@ -102,3 +102,25 @@ test('orphan recovery does not block requests and never launches unbounded DELET
   assert.equal(started.length, 2, 'shutdown must stop dispatching queued stale deletions');
   assert.equal((await readdir(dir)).length, 4, 'unprocessed journal records are retained');
 });
+
+test('a failed orphan cleanup stops the sweep without retrying every stored ID', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-recovery-failure-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const owner = new SessionJournal({ directory: dir, removeSession: async () => {} });
+  for (let i = 0; i < 6; i++) await owner.track('ses_failure_' + i);
+  for (const name of await readdir(dir)) {
+    const file = path.join(dir, name);
+    const record = JSON.parse(await readFile(file, 'utf8'));
+    await writeFile(file, JSON.stringify({ ...record, pid: 99999999 }));
+  }
+  let attempts = 0;
+  const cleanup = new SessionJournal({ directory: dir, isAlive: () => false,
+    logger: { warn() {} }, removeSession: async () => {
+      attempts++;
+      throw Error('OpenCode unavailable');
+    } });
+  await cleanup.init();
+  await cleanup.drain();
+  assert.equal(attempts, 2, 'each worker stops after one failed DELETE');
+  assert.equal((await readdir(dir)).length, 6, 'all uncollected Session IDs remain for recovery');
+});
