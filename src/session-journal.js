@@ -14,10 +14,11 @@ function processAlive(pid) {
  * Files contain only opaque OpenCode IDs and process leases; never message text.
  * Never delete sessions from other live DSH processes or unknown owners. */
 export class SessionJournal {
-  constructor({ directory, removeSession, logger, isAlive = processAlive } = {}) {
+  constructor({ directory, removeSession, logger, onEvent, isAlive = processAlive } = {}) {
     this.directory = directory || null;
     this.removeSession = removeSession;
     this.logger = logger;
+    this.onEvent = onEvent;
     this.isAlive = isAlive;
     this.instance = randomUUID();
     this.owned = new Set();
@@ -47,6 +48,7 @@ export class SessionJournal {
       }
       // Orphan deletion must never block the first user request. Two workers
       // bound backend load; unfinished journal records survive plugin shutdown.
+      if (orphans.length) this.onEvent?.('orphan.detected', { count: orphans.length });
       const worker = async () => {
         while (!this.stopping && orphans.length) {
           const id = orphans.shift();
@@ -67,6 +69,7 @@ export class SessionJournal {
   async track(id) {
     if (!validId(id)) throw new TypeError('Invalid OpenCode Session identity');
     this.owned.add(id);
+    this.onEvent?.('session.tracked', { source: 'owned' });
     if (!this.directory) return;
     await this.init();
     const record = JSON.stringify({ format: 1, id, pid: process.pid,
@@ -92,11 +95,13 @@ export class SessionJournal {
         await this.removeSession(id);
         this.owned.delete(id);
         if (this.directory) await rm(this.file(id), { force: true });
+        this.onEvent?.('session.reclaimed', { source: force ? 'orphan' : 'owned' });
         return true;
       } catch (error) {
         // Retain the on-disk record; do not repeatedly delete in a tight loop.
         this.logger?.warn?.('dsh-opencode: owned Session cleanup deferred (' +
           (error.code || 'TRANSPORT') + ')');
+        this.onEvent?.('session.reclaim-failed', { errorCode: error.code || 'TRANSPORT' }, 'warn');
         return false;
       }
     })().finally(() => this.pending.delete(id));
