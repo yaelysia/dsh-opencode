@@ -264,11 +264,12 @@ test('diagnostic view extends model-adjacent composer and custom Sidebar tab wit
   const injected = right.opts.inject('some-dsh-session');
   assert.equal(injected.port, 4107);
   const badge = right.component(injected);
-  const iframe = badge.props.children.find(item => item.type === 'iframe');
+  const children = badge.props.children.flat();
+  const iframe = children.find(item => item.type === 'iframe');
   assert.equal(iframe.props.src,
     'http://127.0.0.1:4107/v1/badge?sid=some-dsh-session');
   assert.equal(iframe.props.sandbox, 'allow-scripts allow-same-origin');
-  const open = badge.props.children.find(item => item.type === 'button');
+  const open = children.find(item => item.type === 'button');
   open.props.onClick();
   assert.deepEqual(opened, ['dsh-opencode-diagnostics']);
   const panelInjected = pane.opts.inject('same-session');
