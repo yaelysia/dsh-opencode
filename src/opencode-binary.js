@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { failure } from './errors.js';
 
-// The official opencode-ai dependency and all its platform binaries are pinned.
+// Official prebuilt native packages are exact-version optional dependencies.
+// Deliberately no opencode-ai wrapper: its postinstall may fail in DSH pnpm.
 export const PINNED_OPENCODE_VERSION = '1.19.3';
 
 function variantsFor(platform, arch, libc) {
@@ -13,7 +14,6 @@ function variantsFor(platform, arch, libc) {
       'SERVER_BUNDLED_CLI_UNSUPPORTED');
   }
   const base = 'opencode-' + prefix + '-' + arch;
-  // Baseline is compatible with x64 hardware without AVX2 and needs no probe.
   const names = arch === 'x64' ? [base + '-baseline', base] : [base];
   return platform === 'linux' && libc === 'musl'
     ? names.map(name => name + '-musl') : names;
@@ -23,44 +23,31 @@ function systemLibc() {
   return process.report?.getReport?.().header?.glibcVersionRuntime ? 'glibc' : 'musl';
 }
 
-/** Resolve the native executable directly through the official npm dependency.
- * Works even when pnpm disables the package's postinstall script. */
+/** Resolve the official, pinned, platform-specific binary directly.
+ * No package postinstall, global PATH, runtime downloads or custom links. */
 export function bundledExecutable({
   platform = process.platform, arch = process.arch,
   libc = systemLibc(), requireFrom = createRequire(import.meta.url),
 } = {}) {
-  let manifestPath;
-  try { manifestPath = requireFrom.resolve('opencode-ai/package.json'); }
-  catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
-    throw failure('Pinned OpenCode CLI is missing. Reinstall dsh-opencode to install '
-      + 'opencode-ai@' + PINNED_OPENCODE_VERSION, 'SERVER_BUNDLED_CLI_MISSING');
-  }
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  if (manifest.version !== PINNED_OPENCODE_VERSION) {
-    throw failure('Unexpected OpenCode CLI version: ' + manifest.version
-      + ', expected ' + PINNED_OPENCODE_VERSION, 'SERVER_BUNDLED_CLI_INVALID');
-  }
-  // pnpm places optional platform binaries beside opencode-ai, not this plugin.
-  const fromPackage = createRequire(manifestPath);
   const binaryName = platform === 'win32' ? 'opencode.exe' : 'opencode';
   for (const name of variantsFor(platform, arch, libc)) {
     let packagePath;
-    try { packagePath = fromPackage.resolve(name + '/package.json'); }
+    try { packagePath = requireFrom.resolve(name + '/package.json'); }
     catch (error) {
       if (error.code === 'MODULE_NOT_FOUND') continue;
       throw error;
     }
-    const binaryManifest = JSON.parse(readFileSync(packagePath, 'utf8'));
-    if (binaryManifest.version !== PINNED_OPENCODE_VERSION) {
-      throw failure('OpenCode platform package version mismatch: ' + name,
+    const manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
+    if (manifest.name !== name || manifest.version !== PINNED_OPENCODE_VERSION) {
+      throw failure('OpenCode platform package mismatch: ' + name
+        + ' (expected ' + PINNED_OPENCODE_VERSION + ')',
         'SERVER_BUNDLED_CLI_INVALID');
     }
     const executable = path.join(path.dirname(packagePath), 'bin', binaryName);
     if (existsSync(executable)) return executable;
   }
-  throw failure('No supported OpenCode CLI binary found for ' + platform + '/' + arch
-    + ' in opencode-ai@' + PINNED_OPENCODE_VERSION
-    + '. Reinstall the plugin with optional dependencies enabled.',
+  throw failure('No supported official OpenCode CLI binary for ' + platform + '/' + arch
+    + ' in pinned version ' + PINNED_OPENCODE_VERSION
+    + '. Reinstall dsh-opencode with platform optional dependencies enabled.',
     'SERVER_BUNDLED_CLI_MISSING');
 }
