@@ -7,6 +7,7 @@ import { Script } from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { DiagnosticHub, sessionKey } from '../src/diagnostics.js';
+import { StructuredToolBroker } from '../src/structured-broker.js';
 import { badgePage, logsPage } from '../src/diagnostics-pages.js';
 
 async function freePort() {
@@ -105,4 +106,30 @@ test('diagnostic bind failure cannot break plugin startup or release another pro
   t.after(() => hub.dispose());
   assert.equal(await hub.start(), false);
   assert.equal((await fetch('http://127.0.0.1:' + server.address().port)).status, 200);
+});
+
+test('native DSH tool broker emits rejected and duplicated requests without arguments', async t => {
+  const hub = new DiagnosticHub();
+  const broker = new StructuredToolBroker();
+  broker.diagnosticEvent = (...args) => hub.record(...args);
+  t.after(() => broker.dispose());
+  const env = await broker.start();
+  const request = { sessionID: 'oc_test', messageID: 'msg1', callID: 'call1',
+    name: 'read', arguments: { file_path: 'SECRET/workspace/file.txt' } };
+  const post = (headers, body = request) => fetch(env.DSH_STRUCTURED_URL + '/call', {
+    method: 'POST', headers: { authorization: 'Bearer ' + env.DSH_STRUCTURED_TOKEN,
+      'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+  });
+  assert.equal((await post({ authorization: 'Bearer invalid' })).status, 401);
+  broker.register('oc_test', { dshSessionId: 'dsh-private', tools: [{
+    name: 'read', parameters: { type: 'object' },
+  }], onCall: () => {} });
+  assert.equal((await post({}, { ...request, name: 'write' })).status, 422);
+  assert.equal((await post({}, { ...request, arguments: 'invalid' })).status, 400);
+  assert.ok(hub.events().some(e => e.code === 'auth-rejected'));
+  assert.ok(hub.events().some(e => e.code === 'catalog-rejected'));
+  assert.ok(hub.events().some(e => e.code === 'invalid-envelope'));
+  const output = JSON.stringify(hub.events());
+  assert.doesNotMatch(output, /SECRET|workspace\/file|dsh-private|Bearer invalid/);
+  assert.ok(hub.events().some(e => e.session === sessionKey('dsh-private')));
 });
