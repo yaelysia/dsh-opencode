@@ -311,7 +311,7 @@ export class StructuredAdapterRuntime {
       this.bindSignal(turn, options.signal);
       if (this.disposed || turn.closed) throw failure('Structured startup cancelled', 'ABORTED');
       this.broker.register(id, {
-        tools: options.tools ?? [], instructions: system,
+        tools: options.tools ?? [], instructions: system, dshSessionId: options.sessionId,
         onCall: call => {
           this.trace('tool', 'requested', { sessionId: options.sessionId, tool: call.name });
           this.arm(turn, this.handoffTimeoutMs, 'TOOL_RESULT_TIMEOUT');
