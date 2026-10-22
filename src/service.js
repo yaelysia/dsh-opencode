@@ -85,6 +85,23 @@ export class OpenCodeService {
     this.readyOwned = false;
     this.guardProof = null;
     this.guardVerified = false;
+    // Only the service's own child may be restarted; every generation must
+    // register its DSH agent and pre-execution guard before accepting tools.
+    this.generation = 0;
+    this.lastHealthAt = 0;
+    this.healthIntervalMs = Number.isFinite(config.healthIntervalMs)
+      ? Math.max(100, Math.floor(config.healthIntervalMs)) : 30_000;
+    this.restartTimes = [];
+    this.onBeforeRestart = deps.onBeforeRestart;
+    this.watchdog = setInterval(() => {
+      if (this.closed || !this.readyOwned || !this.owned || this.starting) return;
+      if (Date.now() - this.lastHealthAt < this.healthIntervalMs) return;
+      void this.ready({ requireManaged: true }).catch(error => {
+        this.logger.warn?.('dsh-opencode: managed OpenCode health check failed [' +
+          (error.code || 'TRANSPORT') + ']');
+      });
+    }, this.healthIntervalMs);
+    this.watchdog.unref?.();
   }
 
   async verifiedNativeDenials(parts) {
@@ -174,15 +191,58 @@ export class OpenCodeService {
     }
   }
 
-  /** Called at plugin mount and before each ordinary model call. */
+  /** Recheck a live PID: an existing process is not proof its HTTP API works.
+   * A failed check is confirmed once more to avoid restarting on one hiccup. */
+  async verifyOrRecover() {
+    if (await this.health()) {
+      this.lastHealthAt = Date.now();
+      return;
+    }
+    if (await this.health()) {
+      this.lastHealthAt = Date.now();
+      return;
+    }
+    const now = Date.now();
+    this.restartTimes = this.restartTimes.filter(t => now - t < 60_000);
+    if (this.restartTimes.length >= 2) {
+      throw failure('Managed OpenCode keeps failing health checks; recovery paused',
+        'SERVER_RECOVERY_COOLDOWN');
+    }
+    this.restartTimes.push(now);
+    this.readyOwned = false;
+    // Abort retained OpenCode POSTs and pending DSH tool callbacks BEFORE
+    // killing the process; they may never be replayed in a new server.
+    await this.onBeforeRestart?.();
+    if (this.closed) throw failure('OpenCode plugin is unloading', 'SERVER_STOPPED');
+    this.logger.warn?.('dsh-opencode: managed OpenCode stopped answering; restarting owned child');
+    await this.stopOwned();
+    if (this.closed) throw failure('OpenCode plugin is unloading', 'SERVER_STOPPED');
+    await this.ensureStarted();
+  }
+
+  /** Transport/timeouts trigger prompt health rechecking, never blind replay. */
+  reportLocalFailure() {
+    if (this.closed || !this.owned || !this.readyOwned) return;
+    this.lastHealthAt = 0;
+    void this.ready({ requireManaged: true }).catch(error => {
+      this.logger.warn?.('dsh-opencode: health recovery check failed [' +
+        (error.code || 'TRANSPORT') + ']');
+    });
+  }
+
+  /** Called at plugin mount, periodically, and before each model call. */
   async ready(options = {}) {
     if (this.closed) throw failure('OpenCode plugin is unloading', 'SERVER_STOPPED');
     if (this.config.autoStart !== false && this.target) {
       if (this.starting) await this.starting;
-      else if (!(this.owned && this.owned.exitCode === null &&
-        this.owned.signalCode === null && this.readyOwned)) {
-        this.starting = this.ensureStarted().finally(() => { this.starting = null; });
-        await this.starting;
+      else {
+        const ownedReady = this.owned && this.owned.exitCode === null
+          && this.owned.signalCode === null && this.readyOwned;
+        if (!ownedReady || Date.now() - this.lastHealthAt >= this.healthIntervalMs) {
+          const operation = ownedReady ? this.verifyOrRecover() : this.ensureStarted();
+          this.starting = operation.finally(() => { this.starting = null; });
+          await this.starting;
+        }
       }
     }
     // When the DSH tool bridge is enabled, do not trust a pre-existing
@@ -271,6 +331,10 @@ export class OpenCodeService {
           }
           if (!lastAgentError && await this.verifyGuard()) {
             this.readyOwned = terminal === null;
+            if (this.readyOwned) {
+              this.generation++;
+              this.lastHealthAt = Date.now();
+            }
             this.logger.info?.('dsh-opencode: local OpenCode server ready at ' + origin);
             return;
           }
@@ -297,6 +361,7 @@ export class OpenCodeService {
     const child = this.owned;
     this.owned = null;
     this.readyOwned = false;
+    this.lastHealthAt = 0;
     if (proof) {
       await this.rmImpl(proof.marker, { force: true }).catch(() => {});
       await this.rmImpl(proof.audit, { force: true }).catch(() => {});
@@ -321,6 +386,7 @@ export class OpenCodeService {
   async dispose() {
     if (this.closed) return;
     this.closed = true;
+    clearInterval(this.watchdog);
     this.controller.abort();
     await this.stopOwned();
     await this.starting?.catch(() => {});
