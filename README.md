@@ -2,7 +2,7 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前开发分支：0.2.0-alpha.22（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前开发分支：0.2.0-alpha.23（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
