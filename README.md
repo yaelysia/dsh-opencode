@@ -6,7 +6,7 @@
 
 ## 安装与使用：只需操作 DSH
 
-环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）及 Node.js >=22.19.0。**无需独立安装 OpenCode CLI**：本插件固定依赖官方 `opencode-ai@1.19.3`，安装时由 DSH 包管理器一并获取对应的平台二进制。运行时不会自行下载或升级。
+环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）及 Node.js >=22.19.0。**无需独立安装 OpenCode CLI**：本插件直接声明官方平台原生二进制 npm 包（固定为 OpenCode `1.19.3`），由 DSH 的包管理器按系统选择，不再安装 `opencode-ai` 包装器或运行其 `postinstall.mjs`。运行时不会自行下载或升级。
 
 在 DSH 插件页以 Git 来源安装：
 
@@ -24,9 +24,11 @@ git+https://github.com/yaelysia/dsh-opencode.git#master
 
 ## 内置固定版本 OpenCode CLI
 
-`opencode-ai@1.19.3` 作为普通运行依赖，其官方可选依赖提供各平台原生二进制。插件直接解析二进制，不依赖全局 npm shim、手工硬链接或安装后脚本；x64 优先使用 baseline 变体以兼容不支持 AVX2 的 CPU。
+直接将官方 `opencode-windows-*`、`opencode-linux-*`、`opencode-darwin-*` 原生包作为**固定版本可选依赖**（`1.19.3`），由 npm/pnpm 依据 OS/CPU/libc 安装对应版本；插件直接解析其 `bin/opencode(.exe)`，不依赖全局 npm shim、手工硬链接或安装后脚本。x64 优先使用 baseline 变体以兼容不支持 AVX2 的 CPU。
 
-安装或更新插件时需要包管理器能获取 npm 依赖，首次安装会增加 CLI 下载体积。插件运行时不会自动下载或升级。若 CLI 可选依赖缺失或版本不一致，将明确报错，不会偷偷使用全局 OpenCode 或 Desktop 内置版本。已安装的旧插件请更新/重装后完整退出并重启 DSH。
+安装或更新插件时需要包管理器能获取 npm 依赖，首次安装会增加 CLI 下载体积。插件运行时不会自动下载或升级。若原生可选依赖缺失或版本不一致，将明确报错，不会偷偷使用全局 OpenCode 或 Desktop 内置版本。已安装的旧插件请更新/重装后完整退出并重启 DSH。
+
+**alpha.20 安装修复：** 此前通过 `opencode-ai@1.19.3` 间接安装原生包时，其 `postinstall.mjs` 会在某些 DSH Desktop / pnpm 环境中报“failed to install the right opencode CLI package”，导致整个插件安装失败。当前版本移除该包装器并直接依赖官方原生 npm 包。CI 同时覆盖启用和禁用 install scripts 的 pnpm 安装，不需要手动安装 OpenCode CLI，也无需修改 DSH 全局脚本权限。
 
 **Windows 安装目录提醒：** 曾有 DSH 安装目录的文件 ACL 与 Windows 低完整性沙箱冲突，造成 PTC Worker 和 `pwsh` 权限异常。该案例通过将 DSH 安装到非原默认目录得到解决，与 `dsh_call` 无关。遇到类似 `EPERM` 请先检查安装目录权限，不要递归重置系统目录 ACL，也不要长期关闭沙箱。
 
