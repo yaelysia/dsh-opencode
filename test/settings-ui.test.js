@@ -242,7 +242,7 @@ test('diagnostic view extends model-adjacent composer and custom Sidebar tab wit
     effect(fn) { fn(); },
     locale: { bind: () => key => key, register: () => () => {} },
     configForms: {
-      get: () => ({ getSnapshot: () => ({ value: { diagnosticsEnabled: true, diagnosticsPort: 4107 } }) }),
+      get: () => ({ getSnapshot: () => ({ value: { diagnosticsEnabled: true, structuredToolsEnabled: true, diagnosticsPort: 4107 } }) }),
       whileServed: (_ids, register) => register(),
     },
     sidebarRightTabs: { register(definition) { kinds.push(definition); return () => {}; } },
@@ -264,4 +264,28 @@ test('diagnostic view extends model-adjacent composer and custom Sidebar tab wit
   injected.openDiagnostics();
   assert.deepEqual(opened, ['dsh-opencode-diagnostics']);
   assert.equal(pane.opts.inject('same-session').sessionId, 'same-session');
+});
+
+test('diagnostic UI does not mount in legacy mode or when switched off', () => {
+  const { exports } = loadClient();
+  for (const settings of [
+    { diagnosticsEnabled: false, structuredToolsEnabled: true },
+    { diagnosticsEnabled: true, structuredToolsEnabled: false },
+  ]) {
+    const registered = [];
+    exports.apply({
+      effect(fn) { fn(); },
+      locale: { bind: () => key => key, register: () => () => {} },
+      configForms: {
+        get: () => ({ getSnapshot: () => ({ value: settings }) }),
+        whileServed: (_ids, register) => register(),
+      },
+      sidebarRightTabs: { register(definition) { registered.push(definition); return () => {}; } },
+      sidebarRight: { openTab() {} },
+      slots: { inject(_name, attach) { return attach(); },
+        register(opts) { registered.push(opts); return () => {}; } },
+    });
+    assert.equal(registered.some(x => x.name === 'conversation.input.right'), false);
+    assert.equal(registered.some(x => x.kind === 'dsh-opencode-diagnostics'), false);
+  }
 });
