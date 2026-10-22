@@ -274,8 +274,11 @@ test('diagnostic view extends model-adjacent composer and custom Sidebar tab wit
   assert.deepEqual(opened, ['dsh-opencode-diagnostics']);
   const panelInjected = pane.opts.inject('same-session');
   assert.equal(panelInjected.sessionId, 'same-session');
-  assert.equal(pane.component(panelInjected).props.src,
+  const panelView = pane.component(panelInjected);
+  assert.equal(panelView.props.src,
     'http://127.0.0.1:4107/v1/page?sid=same-session');
+  assert.match(panelView.props.sandbox, /allow-downloads/,
+    'read-only logs panel must permit intentional JSONL export');
 });
 
 test('diagnostic UI does not mount in legacy mode or when switched off', () => {
