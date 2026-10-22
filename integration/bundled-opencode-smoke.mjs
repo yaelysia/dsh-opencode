@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { bundledExecutable, PINNED_OPENCODE_VERSION } from '../src/opencode-binary.js';
 
-test('pinned official CLI launches from npm optional dependency with scripts disabled', () => {
+test('pinned official native CLI launches directly without wrapper postinstall', () => {
   const executable = bundledExecutable();
   assert.equal(path.basename(executable),
     process.platform === 'win32' ? 'opencode.exe' : 'opencode');
