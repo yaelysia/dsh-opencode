@@ -56,7 +56,8 @@ export class StructuredAdapterRuntime {
     this.sessions = new StructuredSessionRegistry({
       onRetire: id => this.reclaim(id),
       maxIdle: 32,
-      idleTtlMs: 30 * 60_000,
+      idleTtlMs: (Number.isInteger(config.sessionIdleHours) && config.sessionIdleHours >= 1
+        && config.sessionIdleHours <= 2160 ? config.sessionIdleHours : 168) * 60 * 60_000,
     });
     this.contextBudget = new ContextBudget(this.client, { logger: config.logger });
     this.sweeper = setInterval(() => this.sessions.sweep(), 60_000);
