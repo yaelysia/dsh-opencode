@@ -147,3 +147,30 @@ A small process-scoped journal of opaque owned Session IDs supports
 conservative orphan cleanup after restarts. Only idle/owned Sessions are
 deleted; pending tool handoffs are never candidates. Failed cleanup retains
 the journal entry. Real gateway compatibility requires field acceptance.
+
+## 2026-10-22 — DSH Desktop pnpm install failure, native binary packaging fix
+
+A DSH Desktop Git install of alpha.20 failed at `node_modules/opencode-ai postinstall$ node ./postinstall.mjs`
+with `It seems your package manager failed to install the right opencode CLI package`
+and `ELIFECYCLE exit code 1`. This is the official `opencode-ai@1.19.3`
+wrapper attempting to resolve/copy an optional OS-native binary; if resolution
+or its npm-based fallback cannot produce a usable binary, the *entire plugin
+installation* fails before startup. Previous pnpm CI always used
+`--ignore-scripts`, so it missed this failure class.
+
+Replaced `opencode-ai` with **exactly pinned official platform-specific
+`opencode-{windows,linux,darwin}-*` optional dependencies** at version
+`1.19.3`. `bundledExecutable()` resolves them directly from the plugin
+without wrapper postinstall, runtime downloads, shell shims, global PATH, or
+manual installations. Unsupported/missing/mismatched binaries still fail
+closed with explicit errors. DSH's only tool executor remains DSH.
+
+Regression coverage:
+- Windows/Linux packed-plugin pnpm install with both regular lifecycle scripts
+  and `--ignore-scripts`, verifying the binary launches and `opencode-ai`
+  wrapper is absent.
+- Windows/Linux `pnpm add git+https://github.com/yaelysia/dsh-opencode.git#<SHA>`
+  matching DSH's real Git install method with scripts enabled.
+- Existing pinned 1.19.3 full bridge/guard/compaction integration and Node
+  22/24 checks are retained. Desktop installation itself still requires
+  user-side field acceptance.
