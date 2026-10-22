@@ -202,6 +202,10 @@ export class OpenCodeService {
       this.lastHealthAt = Date.now();
       return;
     }
+    return this.restartOwned();
+  }
+
+  async restartOwned() {
     const now = Date.now();
     this.restartTimes = this.restartTimes.filter(t => now - t < 60_000);
     if (this.restartTimes.length >= 2) {
@@ -239,7 +243,11 @@ export class OpenCodeService {
         const ownedReady = this.owned && this.owned.exitCode === null
           && this.owned.signalCode === null && this.readyOwned;
         if (!ownedReady || Date.now() - this.lastHealthAt >= this.healthIntervalMs) {
-          const operation = ownedReady ? this.verifyOrRecover() : this.ensureStarted();
+          // An exited child invalidates all OpenCode session bindings just as
+          // an unresponsive live child does. Never reuse its old session IDs.
+          const operation = ownedReady ? this.verifyOrRecover()
+            : this.owned && this.generation > 0 ? this.restartOwned()
+              : this.ensureStarted();
           this.starting = operation.finally(() => { this.starting = null; });
           await this.starting;
         }
