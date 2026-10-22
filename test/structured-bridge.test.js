@@ -236,3 +236,15 @@ test('structured Session idle TTL follows the configured hours without disabling
     assert.equal(adapter.runtime.sessions.maxIdle, 32);
   } finally { await adapter.runtime.dispose(); }
 });
+
+test('single DSH plugin wires managed process restart to structured Session invalidation', async () => {
+  const { createPluginRuntime } = await import('../src/runtime.js');
+  const runtime = createPluginRuntime({ structuredToolsEnabled: true, sessionIdleHours: 48 });
+  try {
+    assert.equal(typeof runtime.supervisor.onBeforeRestart, 'function');
+    assert.equal(runtime.adapter.runtime.sessions.idleTtlMs, 48 * 3_600_000);
+    runtime.adapter.runtime.sessions.active('synthetic', 'oc-synthetic');
+    await runtime.supervisor.onBeforeRestart();
+    assert.equal(runtime.adapter.runtime.sessions.entries.size, 0);
+  } finally { await runtime.dispose(); }
+});
