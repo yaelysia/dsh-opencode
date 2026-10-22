@@ -210,3 +210,18 @@ test('completed Session stores only a fingerprint, never a full previous assista
     [...first, assistant(longReply), user('follow-up')], ''),
     { id: 'oc-memory', messages: [user('follow-up')], lastUsage: null });
 });
+
+test('Session reuse diagnostics classify history changes and duplicate completed turns', () => {
+  const events = [];
+  const registry = new StructuredSessionRegistry({ onEvent: (code, detail) =>
+    events.push({ code, ...detail }) });
+  const original = [user('first')];
+  registry.active('["dsh-a","test-model","chat"]', 'oc-1');
+  registry.complete('["dsh-a","test-model","chat"]', 'oc-1', original, 'system', 'answer');
+  assert.throws(() => registry.plan('["dsh-a","test-model","chat"]', original, 'system'),
+    error => error.code === 'STALE_DSH_TURN');
+  assert.ok(events.some(item => item.code === 'stale-turn'));
+  registry.plan('["dsh-a","test-model","chat"]',
+    [user('tampered'), assistant('answer'), user('next')], 'system');
+  assert.ok(events.some(item => item.code === 'retired' && item.reason === 'history-changed'));
+});
