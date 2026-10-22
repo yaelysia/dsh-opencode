@@ -263,9 +263,18 @@ test('diagnostic view extends model-adjacent composer and custom Sidebar tab wit
   assert.equal(pane.opts.key, 'dsh-opencode/diagnostics');
   const injected = right.opts.inject('some-dsh-session');
   assert.equal(injected.port, 4107);
-  injected.openDiagnostics();
+  const badge = right.component(injected);
+  const iframe = badge.props.children.find(item => item.type === 'iframe');
+  assert.equal(iframe.props.src,
+    'http://127.0.0.1:4107/v1/badge?sid=some-dsh-session');
+  assert.equal(iframe.props.sandbox, 'allow-scripts allow-same-origin');
+  const open = badge.props.children.find(item => item.type === 'button');
+  open.props.onClick();
   assert.deepEqual(opened, ['dsh-opencode-diagnostics']);
-  assert.equal(pane.opts.inject('same-session').sessionId, 'same-session');
+  const panelInjected = pane.opts.inject('same-session');
+  assert.equal(panelInjected.sessionId, 'same-session');
+  assert.equal(pane.component(panelInjected).props.src,
+    'http://127.0.0.1:4107/v1/page?sid=same-session');
 });
 
 test('diagnostic UI does not mount in legacy mode or when switched off', () => {
