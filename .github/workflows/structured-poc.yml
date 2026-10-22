@@ -69,3 +69,7 @@ jobs:
           node-version: 24
       - name: Verify pinned native binaries with pnpm scripts on/off
         run: node --test integration/pnpm-opencode-smoke.mjs
+      - name: Reproduce DSH Git-source pnpm add with scripts enabled
+        env:
+          DSH_TEST_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node --test integration/pnpm-git-opencode-smoke.mjs
