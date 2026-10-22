@@ -50,7 +50,9 @@ export class SessionJournal {
       const worker = async () => {
         while (!this.stopping && orphans.length) {
           const id = orphans.shift();
-          await this.retire(id, { force: true });
+          // A shared server/auth failure can make every orphan DELETE fail.
+          // Stop this startup sweep after a failure instead of hammering it.
+          if (!(await this.retire(id, { force: true }))) break;
         }
       };
       this.recovering = Promise.allSettled(
