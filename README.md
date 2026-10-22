@@ -61,7 +61,7 @@ DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败�
 - **上下文限额：** 优先从 OpenCode `GET /provider` 的实际模型目录读取 `limit.context/input/output`，10 分钟内缓存；不将 DeepSeek Flash 写死为 256K。依据上轮模型实际 Token 用量（含缓存 Token）与新增消息/系统指令/工具目录的保守估算，在安全输入窗口的约 78% 提前触发原生压缩。目录不可用时，不猜限额，仍依赖 OpenCode 内置溢出处理。
 - **压缩归属：** 插件仅在完整结束的可复用 Session 下一轮发送新消息前，调用 OpenCode `POST /session/:id/summarize`。压缩期间 DSH 工具目录明确为空，不能使用 `dsh_call` 执行工作区动作；压缩内部的 assistant/summary 流事件不展示给 DSH。压缩失败明确返回 `CONTEXT_COMPACTION_FAILED`，丢弃不确定的 OpenCode 复用状态，**不会修改、裁剪 DSH 的原始历史**。单次新输入本身超过安全预算返回 `CONTEXT_LIMIT_EXCEEDED`。
 - **Session 回收：** 保留最近最多 32 个空闲映射，空闲 30 分钟过期；每分钟轻量检查一次。淘汰或 DSH 历史改变时，通过 `DELETE /session/:id` 删除确认由本插件创建的、已空闲的 Session。匿名会话完成即回收；取消/失败仅在后台请求停止后回收。等待 DSH 审批的 Session **绝不清理**。
-- **异常重启恢复：** 插件运行目录的 `dsh-opencode-sessions/` 保存仅包含 OpenCode ID、进程 PID、实例标识、时间戳的原子 JSON 记录，不保存消息或摘要。下次启动仅尝试清理前一持有者进程已确认退出的自有 Session；未知或仍存活的持有者不清理。删除失败保留记录以供下次尝试。不会扫描或删除用户独立的 OpenCode 会话。
+- **异常重启恢复：** 插件运行目录的 `dsh-opencode-sessions/` 保存仅包含 OpenCode ID、进程 PID、实例标识、时间戳的原子 JSON 记录，不保存消息或摘要。下次启动仅尝试清理前一持有者进程已确认退出的自有 Session；未知或仍存活的持有者不清理。残留清理后台并发最多 2 项，不阻塞首次对话；插件退出时停止派发新清理任务，未处理和删除失败的记录保留至下次启动。写入日志失败会导致崩溃后无法自动定位该 Session，属于尽力恢复而非强一致保证。不会扫描或删除用户独立的 OpenCode 会话。
 
 压缩会进行额外模型请求，免费模型网关可能拒绝；真实 DeepSeek/GLM 压缩兼容性与耗时须在 Desktop 验收。模型目录和近似 Token 估算不能保证提前预测所有上游限流，保留上游原生溢出处理作为后备。
 
