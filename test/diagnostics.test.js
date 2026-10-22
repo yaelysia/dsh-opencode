@@ -57,7 +57,7 @@ test('diagnostics expose only bounded redacted metadata and prevent cross-origin
   assert.equal(snapshot.session, sessionKey(sessionId));
   const events = await fetch(origin + '/v1/events', { headers: common })
     .then(res => res.json());
-  assert.equal(events.items.length, 3);
+  assert.equal(events.items.length, 4, 'startup emits diagnostics.ready in addition to the three fixture events');
   assert.ok(events.items.some(e => e.session === sessionKey(sessionId)));
   const text = JSON.stringify(events);
   assert.doesNotMatch(text, /secret-dsh-session|do not store|Please reveal|Bearer/i);
