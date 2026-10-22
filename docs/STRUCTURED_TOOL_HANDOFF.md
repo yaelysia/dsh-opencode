@@ -181,3 +181,20 @@ Regression coverage:
 - Owned OpenCode processes receive a low-frequency loopback health probe (30s), a second confirming probe on failure, and a serialized, rate-limited restart. Unmanaged processes are never killed. The restarted child must present the isolated `dsh-bridge` and fresh native tool guard marker before any subsequent model call.
 - On replacement, the DSH-side adapter aborts retained model requests and all pending `dsh_call` bridges, invalidates reusable Session mappings and model budget cache. Already delivered tools remain non-replayable, with their terminal errors preserved for the original call ID. Legacy adapter clears upstream incremental cache on child generation change.
 - Two restart attempts per 60s maximum. Upstream free-tier 429/restrictions are provider responses, not local liveness failures. Current steps can fail and are **not** transparently retried; next user turns recover against DSH history.
+
+## 2026-10-22 — Alpha.22 read-only diagnostics UI
+
+- Host `DiagnosticHub` records strict allowlisted operational metadata only and rotates
+  bounded JSONL files; never serialize full user messages, tool JSON or credentials.
+- `conversation.input.right` is a public DSH slot **before the model selector**;
+  `sidebar.right.pane.tab` is the public keyed body for a registered custom
+  `sidebarRightTabs` kind. No DSH core modifications or DOM monkey-patching.
+- The composed, read-only UI uses a local 127.0.0.1 diagnostic server on configurable
+  port 4097, separate from the Basic Auth OpenCode model endpoint.
+  Cross-origin API reads are rejected; only same-origin embedded iframe code can
+  access redacted snapshots/events with a diagnostic-specific header.
+- The badge reports approximate last-known context (not an exact tokenizer),
+  compressing state, and unknown limits honestly. The Sidebar can filter session,
+  category, level and export redacted JSONL. A port collision does not fail the model.
+- Included health/process, Session GC, context and tool handoff event categories.
+  A full DSH Desktop smoke remains necessary for iframe/CSP and Sidebar rendering.
