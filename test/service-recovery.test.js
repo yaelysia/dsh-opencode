@@ -9,7 +9,6 @@ import { OpenCodeService } from '../src/service.js';
 
 async function fixture(t, config = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-health-recovery-'));
-  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }));
   const script = path.join(root, 'service.mjs');
   await writeFile(script, [
     "import { createServer } from 'node:http';",
@@ -40,7 +39,12 @@ async function fixture(t, config = {}) {
     logger: { info() {}, warn(message) { warnings.push(message); } },
     onBeforeRestart() { events.push('invalidate'); },
   });
-  t.after(async () => { await manager.dispose(); });
+  t.after(async () => {
+    // On Windows the child owns cwd=runtime/workspace. Always stop it before
+    // deleting the sandbox, otherwise test cleanup can fail with EBUSY.
+    await manager.dispose();
+    await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+  });
   await manager.ready({ requireManaged: true });
   return { manager, warnings, events };
 }
