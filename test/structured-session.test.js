@@ -196,3 +196,17 @@ test('cancellation invalidates a reused session before a subsequent fresh attemp
     assert.equal(f.creates, 2, 'the cancelled, possibly dirty session must not be reused');
   } finally { await f.close(); }
 });
+
+test('completed Session stores only a fingerprint, never a full previous assistant reply', () => {
+  const registry = new StructuredSessionRegistry();
+  const first = [user('one')];
+  const longReply = 'answer-'.repeat(50000);
+  registry.active('memory', 'oc-memory');
+  registry.complete('memory', 'oc-memory', first, '', longReply);
+  const entry = registry.entries.get('memory');
+  assert.equal(Object.hasOwn(entry, 'reply'), false);
+  assert.equal(entry.replyHash.length, 64);
+  assert.deepEqual(registry.plan('memory',
+    [...first, assistant(longReply), user('follow-up')], ''),
+    { id: 'oc-memory', messages: [user('follow-up')], lastUsage: null });
+});
