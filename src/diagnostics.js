@@ -58,6 +58,7 @@ export class DiagnosticHub {
     this.startPromise = null;
     this.closed = false;
     this.fileBytes = 0;
+    this.persisting = false;
     this.file = this.root ? path.join(this.root, 'dsh-opencode-diagnostics.jsonl') : null;
   }
 
@@ -71,7 +72,7 @@ export class DiagnosticHub {
       ...(session ? { session } : {}), data: safeFields(details) };
     this.items.push(event);
     this.items = trim(this.items, this.maxEntries);
-    if (this.file) {
+    if (this.file && this.persisting) {
       const line = JSON.stringify(event) + '\n';
       this.writeChain = this.writeChain.then(async () => {
         await mkdir(this.root, { recursive: true, mode: 0o700 });
@@ -172,6 +173,7 @@ export class DiagnosticHub {
     if (this.startPromise) return this.startPromise;
     this.startPromise = (async () => {
       await this.load();
+      this.persisting = true;
       const server = createServer((request, response) => this.handle(request, response));
       try {
         await new Promise((resolve, reject) => {
@@ -228,6 +230,7 @@ export class DiagnosticHub {
 
   async dispose() {
     this.closed = true;
+    this.persisting = false;
     await this.startPromise?.catch(() => {});
     if (this.server) {
       this.server.closeAllConnections?.();
