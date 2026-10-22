@@ -90,6 +90,7 @@ export class OpenCodeService {
     // register its DSH agent and pre-execution guard before accepting tools.
     this.generation = 0;
     this.lastHealthAt = 0;
+    this.lastHealthyLogAt = 0;
     this.healthIntervalMs = Number.isFinite(config.healthIntervalMs)
       ? Math.max(100, Math.floor(config.healthIntervalMs)) : 30_000;
     this.restartTimes = [];
@@ -125,10 +126,13 @@ export class OpenCodeService {
         }
       } catch { /* Incomplete append: never count as a denial. */ }
     }
-    return new Set(parts.filter(part => part.type === 'tool' && part.state?.status === 'error'
+    const verified = new Set(parts.filter(part => part.type === 'tool' && part.state?.status === 'error'
       && typeof part.callID === 'string' && typeof part.sessionID === 'string'
       && records.has(JSON.stringify([part.sessionID, part.callID, part.tool])))
       .map(part => part.id));
+    if (verified.size) this.diagnosticEvent?.('tool', 'native-guard.denied',
+      { count: verified.size }, 'warn');
+    return verified;
   }
 
   async verifyGuard() {
@@ -138,6 +142,8 @@ export class OpenCodeService {
     try {
       const content = await this.readFileImpl(this.guardProof.marker, 'utf8');
       this.guardVerified = content === this.guardProof.nonce;
+      if (this.guardVerified) this.diagnosticEvent?.('service', 'guard.verified',
+        { generation: this.generation }, 'info');
     } catch { return false; }
     return this.guardVerified;
   }
@@ -199,11 +205,19 @@ export class OpenCodeService {
   async verifyOrRecover() {
     if (await this.health()) {
       this.lastHealthAt = Date.now();
+      if (this.lastHealthAt - this.lastHealthyLogAt >= 300_000) {
+        this.diagnosticEvent?.('service', 'health.ok', { generation: this.generation }, 'debug');
+        this.lastHealthyLogAt = this.lastHealthAt;
+      }
       return;
     }
     this.diagnosticEvent?.('service', 'health.retry', { generation: this.generation }, 'warn');
     if (await this.health()) {
       this.lastHealthAt = Date.now();
+      if (this.lastHealthAt - this.lastHealthyLogAt >= 300_000) {
+        this.diagnosticEvent?.('service', 'health.ok', { generation: this.generation }, 'debug');
+        this.lastHealthyLogAt = this.lastHealthAt;
+      }
       return;
     }
     this.diagnosticEvent?.('service', 'health.unresponsive',
