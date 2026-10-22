@@ -55,6 +55,7 @@ export class StructuredAdapterRuntime {
     this.journal = new SessionJournal({
       directory: config.sessionJournalRoot ? path.join(config.sessionJournalRoot, 'dsh-opencode-sessions') : null,
       removeSession: id => this.deleteOwnedSession(id), logger: config.logger,
+      onEvent: (code, data, level) => this.trace('journal', code, data, level),
     });
     this.sessions = new StructuredSessionRegistry({
       onRetire: id => this.reclaim(id),
