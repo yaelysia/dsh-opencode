@@ -45,7 +45,18 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "description": "DSH OpenCode bridge with managed structured tools and optional legacy transport",
-  "dependencies": {
-    "opencode-ai": "1.19.3"
+  "optionalDependencies": {
+    "opencode-windows-x64-baseline": "1.19.3",
+    "opencode-windows-x64": "1.19.3",
+    "opencode-windows-arm64": "1.19.3",
+    "opencode-linux-x64-baseline": "1.19.3",
+    "opencode-linux-x64": "1.19.3",
+    "opencode-linux-x64-baseline-musl": "1.19.3",
+    "opencode-linux-x64-musl": "1.19.3",
+    "opencode-linux-arm64": "1.19.3",
+    "opencode-linux-arm64-musl": "1.19.3",
+    "opencode-darwin-x64-baseline": "1.19.3",
+    "opencode-darwin-x64": "1.19.3",
+    "opencode-darwin-arm64": "1.19.3"
   }
 }
