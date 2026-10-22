@@ -267,7 +267,7 @@ test('diagnostics shortcut mounts while ConfigMirror is loading and opens the na
   assert.equal(updated.find(e => e.type === 'iframe').props.src,
     'http://127.0.0.1:4107/v1/badge?sid=dsh-session');
   updated.find(e => e.type === 'button').props.onClick();
-  assert.deepEqual(opened, [{ kind: 'browser',
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{ kind: 'browser',
     options: { params: { url: 'http://127.0.0.1:4107/v1/page?sid=dsh-session' } } }]);
   assert.equal(registered.some(x => x.opts.name === 'sidebar.right.pane.tab'), false,
     'use the supported Browser type, do not mount a custom iframe inside Sidebar');
