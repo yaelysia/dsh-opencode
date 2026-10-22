@@ -7,13 +7,10 @@ import path from 'node:path';
 import { bundledExecutable, PINNED_OPENCODE_VERSION } from '../src/opencode-binary.js';
 import { installedExecutable } from '../src/service.js';
 
-async function fixture(t, version = PINNED_OPENCODE_VERSION) {
+async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-cli-bundle-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const modules = path.join(root, 'node_modules');
-  const main = path.join(modules, 'opencode-ai');
-  await mkdir(main, { recursive: true });
-  await writeFile(path.join(main, 'package.json'), JSON.stringify({ name: 'opencode-ai', version }));
   return {
     requireFrom: createRequire(path.join(root, 'entry.cjs')),
     async install(name, pkgVersion = PINNED_OPENCODE_VERSION) {
@@ -29,9 +26,21 @@ async function fixture(t, version = PINNED_OPENCODE_VERSION) {
   };
 }
 
-test('pins official OpenCode as a normal dependency without plugin install scripts', async () => {
+test('pins official native binaries directly, without the failing wrapper postinstall', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url)));
-  assert.equal(pkg.dependencies['opencode-ai'], PINNED_OPENCODE_VERSION);
+  const expected = [
+    'opencode-windows-x64-baseline', 'opencode-windows-x64', 'opencode-windows-arm64',
+    'opencode-linux-x64-baseline', 'opencode-linux-x64',
+    'opencode-linux-x64-baseline-musl', 'opencode-linux-x64-musl',
+    'opencode-linux-arm64', 'opencode-linux-arm64-musl',
+    'opencode-darwin-x64-baseline', 'opencode-darwin-x64', 'opencode-darwin-arm64',
+  ];
+  assert.equal(pkg.dependencies?.['opencode-ai'], undefined,
+    'opencode-ai postinstall must not run under DSH pnpm');
+  assert.deepEqual(Object.keys(pkg.optionalDependencies).sort(), expected.sort());
+  for (const version of Object.values(pkg.optionalDependencies)) {
+    assert.equal(version, PINNED_OPENCODE_VERSION);
+  }
   assert.equal(pkg.scripts.prepare, undefined);
   assert.equal(pkg.scripts.postinstall, undefined);
 });
@@ -70,8 +79,8 @@ test('missing, unsupported or mismatched official binaries never silently fall b
   assert.throws(() => bundledExecutable({
     platform: 'freebsd', arch: 'x64', requireFrom: f.requireFrom,
   }), error => error.code === 'SERVER_BUNDLED_CLI_UNSUPPORTED');
-  const invalid = await fixture(t, '2.1.2');
-  await invalid.install('opencode-windows-x64');
+  const invalid = await fixture(t);
+  await invalid.install('opencode-windows-x64', '2.1.2');
   assert.throws(() => bundledExecutable({
     platform: 'win32', arch: 'x64', requireFrom: invalid.requireFrom,
   }), error => error.code === 'SERVER_BUNDLED_CLI_INVALID');
