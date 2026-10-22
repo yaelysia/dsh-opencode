@@ -11,7 +11,7 @@ const consume = async stream => { const chunks = []; for await (const item of st
 const answer = chunks => chunks.findLast(item => item.type === 'block-end'
   && item.block.type === 'text')?.block.text;
 
-async function fixture({ compactResponse = true, limits = { context: 8192, input: 7000, output: 512 } } = {}) {
+async function fixture({ compactResponse = true, summaryHistory, limits = { context: 8192, input: 7000, output: 512 } } = {}) {
   const broker = new StructuredToolBroker();
   const actions = [];
   let sessionIndex = 0, messageIndex = 0;
@@ -39,7 +39,7 @@ async function fixture({ compactResponse = true, limits = { context: 8192, input
       return Response.json(compactResponse);
     }
     if (route.endsWith('/message') && method === 'GET') {
-      return Response.json([
+      return Response.json(summaryHistory ?? [
         { info: { role: 'user' }, parts: [{ type: 'compaction' }] },
         { info: { role: 'assistant', summary: true, finish: 'stop' },
           parts: [{ type: 'text', text: 'Verified mock summary' }] },
@@ -100,6 +100,23 @@ test('failed compaction surfaces an error and never sends a model prompt or eras
     const retry = await f.invoke('s', [...first, assistant('answer-1'), user('second')]);
     assert.equal(answer(retry), 'answer-2');
     assert.equal(f.actions.filter(a => a.type === 'create').length, 2);
+  } finally { await f.close(); }
+});
+
+test('an HTTP 200 compaction without a finished summary is rejected and retired', async () => {
+  const f = await fixture({ summaryHistory: [
+    { info: { role: 'user' }, parts: [{ type: 'compaction' }] },
+    { info: { role: 'assistant', summary: true, error: { message: 'upstream denied' },
+      finish: 'error' }, parts: [] },
+  ] });
+  try {
+    const initial = [user('first')];
+    await f.invoke('bad-summary', initial);
+    await assert.rejects(f.invoke('bad-summary', [...initial, assistant('answer-1'),
+      user('next')]), e => e.code === 'CONTEXT_COMPACTION_FAILED');
+    await f.adapter.runtime.journal.drain();
+    assert.deepEqual(f.actions.filter(a => a.type === 'message').map(a => a.text), ['first']);
+    assert.deepEqual(f.actions.filter(a => a.type === 'delete').map(a => a.id), ['oc-1']);
   } finally { await f.close(); }
 });
 
