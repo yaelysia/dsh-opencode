@@ -27,6 +27,11 @@ export function createPluginRuntime(config, deps = {}) {
   const settings = { ...options,
     ...(structured ? { sessionJournalRoot: supervisor.runtimeRoot } : {}),
     diagnosticEvent,
+    diagnosticContext: (sessionId, values) => diagnostics.context(sessionId, values),
+    diagnosticSessionCount: (entries) => diagnostics.sessionCount({
+      idle: [...entries.values()].filter(x => x.state === 'idle').length,
+      running: [...entries.values()].filter(x => x.state !== 'idle').length,
+    }),
     passwordProvider: () => supervisor.passwordForClient(),
     verifyNativeDenials: parts => supervisor.verifiedNativeDenials(parts),
     serviceGenerationProvider: () => supervisor.generation,
