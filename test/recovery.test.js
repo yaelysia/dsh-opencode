@@ -333,3 +333,22 @@ test('explicit streaming diagnostic observes a real SSE delta before HTTP comple
   assert.equal(report.probe.streaming.lastSnapshotChars, 4);
   assert.equal(report.probe.text, '1, 2, 3');
 });
+
+test('legacy OpenCode session reuse is invalidated when the managed child generation changes', async () => {
+  let generation = 1;
+  const tx = transport();
+  const client = new OpenCodeServeClient({
+    serviceGenerationProvider: () => generation,
+  }, tx.fetch);
+  await client.complete(call());
+  generation++;
+  await client.complete(call({ messages: [
+    ...call().messages,
+    { role: 'assistant', content: '1' },
+    { role: 'user', content: 'Next question' },
+  ] }));
+  assert.equal(tx.calls.filter(entry => entry.url.endsWith('/session')).length, 2);
+  assert.match(tx.calls.at(-1).body.parts[0].text, /Next question/);
+  assert.match(tx.calls.at(-1).body.parts[0].text, /Hello/,
+    'a recovered child receives authoritative DSH history, not an orphaned incremental fragment');
+});
