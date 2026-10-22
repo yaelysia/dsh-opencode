@@ -72,6 +72,15 @@ export class DiagnosticHub {
       ...(session ? { session } : {}), data: safeFields(details) };
     this.items.push(event);
     this.items = trim(this.items, this.maxEntries);
+    if (category === 'service') {
+      const changes = {
+        'process.ready': 'healthy', 'restart.complete': 'healthy',
+        'process.stop': 'stopped', 'restart.begin': 'restarting',
+        'health.unresponsive': 'unresponsive', 'restart.cooldown': 'cooldown',
+        'process.start-failed': 'failed',
+      };
+      if (changes[code]) this.service = { status: changes[code], updatedAt: Date.now() };
+    }
     if (this.file && this.persisting) {
       const line = JSON.stringify(event) + '\n';
       this.writeChain = this.writeChain.then(async () => {
