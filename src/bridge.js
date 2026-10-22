@@ -72,6 +72,7 @@ export class OpenCodeServeClient {
     this.logger = config.logger;
     this.ensureService = config.ensureService;
     this.serviceGenerationProvider = config.serviceGenerationProvider;
+    this.reportLocalFailure = config.reportLocalFailure;
     this.lastServiceGeneration = null;
     this.verifyNativeDenials = config.verifyNativeDenials;
     this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
@@ -108,8 +109,14 @@ export class OpenCodeServeClient {
       }
     } catch (error) {
       if (signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
-      if (timeout.aborted) throw failure('OpenCode request timed out', 'TIMEOUT');
+      if (timeout.aborted) {
+        this.reportLocalFailure?.();
+        throw failure('OpenCode request timed out', 'TIMEOUT');
+      }
       if (error?.failure) throw error;
+      // Only raw loopback fetch/JSON transport errors trigger health recovery.
+      // Upstream 429 and other model errors are classified separately.
+      this.reportLocalFailure?.();
       throw failure('Cannot reach opencode serve: ' + (error?.message ?? error), 'TRANSPORT');
     }
   }
