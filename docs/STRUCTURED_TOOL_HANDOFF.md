@@ -181,3 +181,42 @@ Regression coverage:
 - Owned OpenCode processes receive a low-frequency loopback health probe (30s), a second confirming probe on failure, and a serialized, rate-limited restart. Unmanaged processes are never killed. The restarted child must present the isolated `dsh-bridge` and fresh native tool guard marker before any subsequent model call.
 - On replacement, the DSH-side adapter aborts retained model requests and all pending `dsh_call` bridges, invalidates reusable Session mappings and model budget cache. Already delivered tools remain non-replayable, with their terminal errors preserved for the original call ID. Legacy adapter clears upstream incremental cache on child generation change.
 - Two restart attempts per 60s maximum. Upstream free-tier 429/restrictions are provider responses, not local liveness failures. Current steps can fail and are **not** transparently retried; next user turns recover against DSH history.
+
+## 2026-10-22 — Alpha.22 read-only diagnostics UI
+
+- Host `DiagnosticHub` records strict allowlisted operational metadata only and rotates
+  bounded JSONL files; never serialize full user messages, tool JSON or credentials.
+- `conversation.input.right` is a public DSH slot **before the model selector**;
+  `sidebar.right.pane.tab` is the public keyed body for a registered custom
+  `sidebarRightTabs` kind. No DSH core modifications or DOM monkey-patching.
+- The composed, read-only UI uses a local 127.0.0.1 diagnostic server on configurable
+  port 4097, separate from the Basic Auth OpenCode model endpoint.
+  Cross-origin API reads are rejected; only same-origin embedded iframe code can
+  access redacted snapshots/events with a diagnostic-specific header.
+- The badge reports approximate last-known context (not an exact tokenizer),
+  compressing state, and unknown limits honestly. The Sidebar can filter session,
+  category, level and export redacted JSONL. A port collision does not fail the model.
+- Included health/process, Session GC, context and tool handoff event categories.
+  A full DSH Desktop smoke remains necessary for iframe/CSP and Sidebar rendering.
+
+## 2026-10-22 — Alpha.23 provider-gated native dock and Zen diagnostics
+
+After Desktop field feedback, the diagnostic badge was removed from the composer
+model row. The client now registers `conversation.composer.dock` using the
+official session-addressed `modelDirectories.directoryFor(sessionId).store`
+from DSH (same pattern as Yan-Zero/dsh-codex). Rendering is restricted to
+`selection.status === "ready"` and `selection.current.provider === "opencode-serve"`.
+The dock component uses CSS order 10 so it appears immediately AFTER DSH's
+native context meter ring in the shared flex container, never inside the editor.
+An unobtrusive status dot conveys native compaction state, and a plain Logs
+link opens DSH's existing Sidebar Browser. ConfigMirror subscription and
+unmounting on provider switch were added to tests.
+
+Bundling the official OpenCode 1.19.3 binary does not grant Zen free-model
+entitlement or copy credentials from other applications. On each managed child
+startup, the plugin reports only local auth-material presence and its child
+proxy-variable policy (`zen.environment`), never credential content; an upstream
+`CLIENT_RESTRICTED` emits `zen.free-access-restricted` as a distinct error.
+Official OpenCode clients also reported the same Zen free-tier rejection in
+October 2026. No client-identity spoofing, tool permission relaxation or
+provider bypass is implemented. First-party Desktop acceptance remains required.

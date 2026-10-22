@@ -3,22 +3,39 @@ import { OpenCodeService } from './service.js';
 import { StructuredToolBroker } from './structured-broker.js';
 import { StructuredOpenCodeService } from './structured-service.js';
 import { createStructuredAdapter } from './structured-adapter.js';
+import { DiagnosticHub } from './diagnostics.js';
 
-/** One DSH plugin owns its adapter, transport listener and OpenCode child.
- * Mode selection never silently falls back to legacy tools after an error. */
+/** One DSH plugin owns adapter, transport listener, local diagnostics and
+ * OpenCode child. Diagnostics are passive and never invoke a model/tool. */
 export function createPluginRuntime(config, deps = {}) {
   const structured = config.structuredToolsEnabled === true;
   const options = structured ? { ...config, autoStart: true, strictOwnedServer: true } : config;
+  let diagnostics;
+  const diagnosticEvent = (category, code, details, level) =>
+    diagnostics?.record(category, code, details, level);
   const broker = structured ? new StructuredToolBroker() : null;
   const supervisor = structured
-    ? new StructuredOpenCodeService(options, { ...deps, broker })
-    : new OpenCodeService(options, deps);
+    ? new StructuredOpenCodeService(options, { ...deps, broker, diagnosticEvent })
+    : new OpenCodeService(options, { ...deps, diagnosticEvent });
+  diagnostics = new DiagnosticHub({
+    root: supervisor.runtimeRoot,
+    port: config.diagnosticsPort ?? 4097,
+    enabled: structured && config.diagnosticsEnabled !== false,
+    logger: deps.logger,
+  });
+  if (broker) broker.diagnosticEvent = diagnosticEvent;
   const settings = { ...options,
     ...(structured ? { sessionJournalRoot: supervisor.runtimeRoot } : {}),
-    serviceGenerationProvider: () => supervisor.generation,
-    reportLocalFailure: () => supervisor.reportLocalFailure(),
+    diagnosticEvent,
+    diagnosticContext: (sessionId, values) => diagnostics.context(sessionId, values),
+    diagnosticSessionCount: (entries) => diagnostics.sessionCount({
+      idle: [...entries.values()].filter(x => x.state === 'idle').length,
+      running: [...entries.values()].filter(x => x.state !== 'idle').length,
+    }),
     passwordProvider: () => supervisor.passwordForClient(),
     verifyNativeDenials: parts => supervisor.verifiedNativeDenials(parts),
+    serviceGenerationProvider: () => supervisor.generation,
+    reportLocalFailure: () => supervisor.reportLocalFailure(),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
       requireManaged: options.strictOwnedServer !== false || requireManaged === true
         || options.guardedReadCompatibility === true,
@@ -28,13 +45,19 @@ export function createPluginRuntime(config, deps = {}) {
     : createAdapter(settings, deps.fetchImpl);
   supervisor.onBeforeRestart = () => adapter.runtime?.onServiceRestart();
   return {
-    adapter, supervisor,
-    ready: () => supervisor.ready(),
+    adapter, supervisor, diagnostics,
+    async ready() {
+      await diagnostics.start();
+      return supervisor.ready();
+    },
     async dispose() {
-      // Release approval waiters and abort the retained model request before
-      // ending its child; callbacks must never outlive the DSH plugin.
+      // Retained tool callbacks stop before the owned service. Diagnostics are
+      // closed last so cleanup/deletion failures can be recorded.
       try { await adapter.runtime?.dispose(); }
-      finally { await supervisor.dispose(); }
+      finally {
+        try { await supervisor.dispose(); }
+        finally { await diagnostics.dispose(); }
+      }
     },
   };
 }

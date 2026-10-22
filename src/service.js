@@ -10,6 +10,7 @@ import { childEnvironment, secureServerEnvironment } from './service-env.js';
 import { BRIDGE_AGENT_ID, managedAgentEnvironment, requireBridgeAgent } from './managed-agent.js';
 import { failure } from './errors.js';
 import { bundledExecutable } from './opencode-binary.js';
+import { zenEnvironmentHints } from './zen-access.js';
 
 const START_TIMEOUT_MS = 15_000;
 const CHECK_INTERVAL_MS = 250;
@@ -55,6 +56,7 @@ export class OpenCodeService {
     // Disabled by default until verified against the real OpenCode free tier.
     this.guardedRead = config.guardedReadCompatibility === true;
     this.logger = deps.logger || console;
+    this.diagnosticEvent = deps.diagnosticEvent;
     this.env = deps.env || process.env;
     this.runtimeRoot = path.resolve(config.runtimeRoot || path.join(
       this.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'OpenCodeRuntime'));
@@ -89,6 +91,7 @@ export class OpenCodeService {
     // register its DSH agent and pre-execution guard before accepting tools.
     this.generation = 0;
     this.lastHealthAt = 0;
+    this.lastHealthyLogAt = 0;
     this.healthIntervalMs = Number.isFinite(config.healthIntervalMs)
       ? Math.max(100, Math.floor(config.healthIntervalMs)) : 30_000;
     this.restartTimes = [];
@@ -97,6 +100,8 @@ export class OpenCodeService {
       if (this.closed || !this.readyOwned || !this.owned || this.starting) return;
       if (Date.now() - this.lastHealthAt < this.healthIntervalMs) return;
       void this.ready({ requireManaged: true }).catch(error => {
+        this.diagnosticEvent?.('service', 'watchdog.failure',
+          { errorCode: error.code || 'TRANSPORT', generation: this.generation }, 'warn');
         this.logger.warn?.('dsh-opencode: managed OpenCode health check failed [' +
           (error.code || 'TRANSPORT') + ']');
       });
@@ -122,10 +127,13 @@ export class OpenCodeService {
         }
       } catch { /* Incomplete append: never count as a denial. */ }
     }
-    return new Set(parts.filter(part => part.type === 'tool' && part.state?.status === 'error'
+    const verified = new Set(parts.filter(part => part.type === 'tool' && part.state?.status === 'error'
       && typeof part.callID === 'string' && typeof part.sessionID === 'string'
       && records.has(JSON.stringify([part.sessionID, part.callID, part.tool])))
       .map(part => part.id));
+    if (verified.size) this.diagnosticEvent?.('tool', 'native-guard.denied',
+      { count: verified.size }, 'warn');
+    return verified;
   }
 
   async verifyGuard() {
@@ -135,6 +143,8 @@ export class OpenCodeService {
     try {
       const content = await this.readFileImpl(this.guardProof.marker, 'utf8');
       this.guardVerified = content === this.guardProof.nonce;
+      if (this.guardVerified) this.diagnosticEvent?.('service', 'guard.verified',
+        { generation: this.generation }, 'info');
     } catch { return false; }
     return this.guardVerified;
   }
@@ -196,12 +206,23 @@ export class OpenCodeService {
   async verifyOrRecover() {
     if (await this.health()) {
       this.lastHealthAt = Date.now();
+      if (this.lastHealthAt - this.lastHealthyLogAt >= 300_000) {
+        this.diagnosticEvent?.('service', 'health.ok', { generation: this.generation }, 'debug');
+        this.lastHealthyLogAt = this.lastHealthAt;
+      }
       return;
     }
+    this.diagnosticEvent?.('service', 'health.retry', { generation: this.generation }, 'warn');
     if (await this.health()) {
       this.lastHealthAt = Date.now();
+      if (this.lastHealthAt - this.lastHealthyLogAt >= 300_000) {
+        this.diagnosticEvent?.('service', 'health.ok', { generation: this.generation }, 'debug');
+        this.lastHealthyLogAt = this.lastHealthAt;
+      }
       return;
     }
+    this.diagnosticEvent?.('service', 'health.unresponsive',
+      { generation: this.generation }, 'error');
     return this.restartOwned();
   }
 
@@ -209,10 +230,14 @@ export class OpenCodeService {
     const now = Date.now();
     this.restartTimes = this.restartTimes.filter(t => now - t < 60_000);
     if (this.restartTimes.length >= 2) {
+      this.diagnosticEvent?.('service', 'restart.cooldown',
+        { generation: this.generation, count: this.restartTimes.length }, 'error');
       throw failure('Managed OpenCode keeps failing health checks; recovery paused',
         'SERVER_RECOVERY_COOLDOWN');
     }
     this.restartTimes.push(now);
+    this.diagnosticEvent?.('service', 'restart.begin',
+      { generation: this.generation, attempt: this.restartTimes.length }, 'warn');
     this.readyOwned = false;
     // Abort retained OpenCode POSTs and pending DSH tool callbacks BEFORE
     // killing the process; they may never be replayed in a new server.
@@ -222,12 +247,16 @@ export class OpenCodeService {
     await this.stopOwned();
     if (this.closed) throw failure('OpenCode plugin is unloading', 'SERVER_STOPPED');
     await this.ensureStarted();
+    this.diagnosticEvent?.('service', 'restart.complete',
+      { generation: this.generation, status: 'healthy' });
   }
 
   /** Transport/timeouts trigger prompt health rechecking, never blind replay. */
   reportLocalFailure() {
     if (this.closed || !this.owned || !this.readyOwned) return;
     this.lastHealthAt = 0;
+    this.diagnosticEvent?.('service', 'health.transport-probe',
+      { generation: this.generation }, 'warn');
     void this.ready({ requireManaged: true }).catch(error => {
       this.logger.warn?.('dsh-opencode: health recovery check failed [' +
         (error.code || 'TRANSPORT') + ']');
@@ -308,6 +337,10 @@ export class OpenCodeService {
     for (const key of ['XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
       await this.mkdirImpl(childEnv[key], { recursive: true });
     }
+    // A bundled official CLI does not imply an authenticated/eligible account.
+    // Report credential presence and proxy policy only; never read auth data.
+    this.diagnosticEvent?.('provider', 'zen.environment',
+      zenEnvironmentHints(childEnv, { direct: this.config.autoStartDirect !== false }));
     const cwd = path.join(root, 'workspace');
     await this.mkdirImpl(cwd, { recursive: true });
     this.controller.signal.throwIfAborted();
@@ -315,6 +348,7 @@ export class OpenCodeService {
     const child = this.spawnImpl(exe, this.argsImpl(port), {
       cwd, env: childEnv, shell: false, windowsHide: true, stdio: 'ignore',
     });
+    this.diagnosticEvent?.('service', 'process.spawn', { pid: child.pid, port });
     this.owned = child;
     this.readyOwned = false;
     let terminal = null;
@@ -343,6 +377,8 @@ export class OpenCodeService {
               this.generation++;
               this.lastHealthAt = Date.now();
             }
+            this.diagnosticEvent?.('service', 'process.ready',
+              { pid: child.pid, generation: this.generation, status: 'healthy' });
             this.logger.info?.('dsh-opencode: local OpenCode server ready at ' + origin);
             return;
           }
@@ -357,6 +393,8 @@ export class OpenCodeService {
           'SERVER_GUARD_NOT_READY')
         : failure('OpenCode server startup timed out', 'SERVER_START_TIMEOUT');
     } catch (error) {
+      this.diagnosticEvent?.('service', 'process.start-failed',
+        { errorCode: error.code || 'SERVER_START_FAILED' }, 'error');
       if (this.owned === child) await this.stopOwned();
       throw error;
     }
@@ -367,6 +405,8 @@ export class OpenCodeService {
     this.guardProof = null;
     this.guardVerified = false;
     const child = this.owned;
+    if (child) this.diagnosticEvent?.('service', 'process.stop',
+      { pid: child.pid, generation: this.generation });
     this.owned = null;
     this.readyOwned = false;
     this.lastHealthAt = 0;

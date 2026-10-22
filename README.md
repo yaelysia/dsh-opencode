@@ -2,7 +2,7 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前开发分支：0.2.0-alpha.21（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前开发分支：0.2.0-alpha.23（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
@@ -77,6 +77,24 @@ DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败�
 
 此功能不承诺在原模型请求中无缝恢复；如果服务死于工具执行期间，当前请求会失败，但后续用户轮次可在健康重建后继续。
 
+## 上下文指示器与诊断侧边栏（alpha.22）
+
+结构化工具模式下，插件通过 OpenCode 官方 `/provider` 模型元数据向 DSH 声明 `context.contextWindow`，并在每次完成时把输入、输出和缓存 Token 用量交给 DSH。**上下文用量直接使用 DSH 原生 ContextMeter**：它显示在输入框下方，和 DSH 自带的圆环、百分比、弹出构成明细保持一致；没有模型上限时原生圆环会隐藏，不伪造 256K 或 1M。它反映 DSH 的请求投影与估算，不是 OpenCode 内部压缩后历史的精确 Token 计数。
+
+**运行状态和「日志」入口放在输入框下方、DSH 原生上下文圆环右侧**，采用与 DSH 底部统计相近的轻量样式，OpenCode 正在压缩时显示压缩状态。该入口从 `conversation.composer.dock` 注册，并实时订阅 DSH 每个会话的 `modelDirectories`：**仅当当前选中模型提供方是 `opencode-serve` 时显示**，切换其他提供方立即隐藏；不再占用聊天框内的模型选择区域。点击后通过 DSH 自带的右侧 Sidebar 浏览器打开本地诊断页面。
+
+侧边栏支持按**本会话 / 全部会话**、事件级别、类别筛选以及搜索事件码、导出 JSONL。日志涵盖 Session 创建、复用、历史不一致与空闲回收、上下文预算/限额与使用量、压缩开始/完成/失败、`dsh_call` 请求/结果/防重放、流式输出、模型失败、本地子进程启动、健康检查、重启与冷却、崩溃残留清理。不会记录聊天正文、工具参数、文件路径、环境变量、认证 token 或上游原始错误描述。Session 标识在日志中仅展示不可逆的短哈希，详细字段由白名单过滤。内存只保留有限条目，本地轮转日志保存在 `runtimeRoot/dsh-opencode-diagnostics.jsonl`（最大约 1.5MB，另保留上一轮转文件）。
+
+**数据通路与安全：** 诊断服务只绑定本机 `127.0.0.1`，默认端口 `4097`，不向局域网或公网开放。侧边栏使用 DSH 自带的浏览器 Tab 载入本地只读页面，不将 `dsh_call` 认证令牌发送给浏览器；JSON API 限制同源读取和专用请求头。设置中可关闭「启用 OpenCode 本地诊断」，也可修改本地诊断端口，保存后完整重启。该功能以本机 DSH Desktop 为目标，不承诺远程 Web Client 能连接到 Desktop 的 loopback 端口。端口冲突会导致诊断视图离线，但不阻止模型调用和 DSH 工具执行。
+
+## 内置 CLI 的免费模型资格与跨机诊断
+
+固定内置的官方 OpenCode `1.19.3` 二进制可以避免每台电脑重复安装，但**不等于网关保证允许所有 DSH 设备使用免费模型**。OpenCode Zen 的 `CLIENT_RESTRICTED` 由服务端返回；官方 Desktop/CLI 在 2026 年 10 月也出现相同问题。当前结构化 Agent 保留已验证的 `read/bash` 兼容声明，且继续在实际执行前强制拦截所有 OpenCode 原生工具，不为解决网关报错而绕过工具安全或冒充官方应用。
+
+启动时诊断记录 `zen.environment`：内置子进程中**是否存在认证材料**（`env-key` / `env-auth` / `local-file` / `none` / `unknown`）及该进程是否清理了 HTTP 代理变量；不读取认证文件内容、不输出密钥，不把“检测到认证材料”当作“已登录”或“具备免费额度”。若服务端返回 `CLIENT_RESTRICTED`，则额外记录 `zen.free-access-restricted`，把它与模型限流、本地服务假活和安装失败区分开。诊断只能帮助分辨环境差异，**不能保证恢复 OpenCode 官方限制的服务资格**。
+
+对比不同 Windows 电脑时，可在诊断页查看 `zen.environment` 与 `zen.free-access-restricted`；如服务端仍拒绝，需按 OpenCode 官方账号和网络要求处理，或改用你已有有效授权的模型服务。插件不会自动复制其他软件的账号凭证，也不需要用户另外安装 OpenCode CLI。
+
 ## 工具结果之后的上游失败与重试安全
 
 如果 DSH 已经执行或拒绝了一次工具请求，OpenCode 在接收工具结果后继续生成时可能返回 `429 / Endpoint is unavailable`。这属于上游模型续接失败，不代表刚才的 DSH 工具没有成功执行。
@@ -115,6 +133,8 @@ DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败�
 | `opencodeExecutable` / `runtimeRoot` | 自动 | 默认使用插件固定依赖的 1.19.3 CLI；填入外部 CLI 路径则覆盖 / 独立运行目录 |
 | `timeoutMs` / `autoStartTimeoutMs` | `120000` / `15000` | 模型生成 / 服务启动超时，单位毫秒 |
 | `sessionIdleHours` | `168` | 结构化模式 Session 空闲保留小时数（1～2160）；独立的 32 个空闲 Session 数量上限仍有效 |
+| `diagnosticsEnabled` | `true` | 在输入栏和 Sidebar 提供只读运行状态与诊断日志，可在设置中关闭 |
+| `diagnosticsPort` | `4097` | 仅用于本机 loopback 只读诊断页面（1024～65535）；与 OpenCode 模型服务的 4096 端口分离 |
 | `username` / `passwordEnv` | `opencode` / `OPENCODE_SERVER_PASSWORD` | 认证设置；托管服务始终生成随机密码 |
 | `models` | 两个默认模型 ID | 可编辑列表；列表出现不代表网关已授权使用 |
 

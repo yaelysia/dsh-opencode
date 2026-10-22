@@ -25,6 +25,11 @@ export class StructuredToolBroker {
     this.server = null;
     this.starting = null;
     this.closed = false;
+    this.diagnosticEvent = undefined;
+  }
+
+  trace(code, details = {}, level = 'warn') {
+    this.diagnosticEvent?.('tool', code, details, level);
   }
 
   async start() {
@@ -52,13 +57,13 @@ export class StructuredToolBroker {
       DSH_STRUCTURED_TOKEN: this.token };
   }
 
-  register(sessionID, { tools, instructions = '', onCall, onDisconnect }) {
+  register(sessionID, { tools, instructions = '', onCall, onDisconnect, dshSessionId }) {
     if (this.closed || !identity(sessionID) || this.sessions.has(sessionID)
       || this.sessions.size >= this.maxSessions || typeof onCall !== 'function') {
       throw failure('Cannot register structured OpenCode session', 'BRIDGE_SESSION_LIMIT');
     }
     this.sessions.set(sessionID, { tools: new Map(), instructions: '', onCall, onDisconnect,
-      seen: new Set(), pending: new Set() });
+      dshSessionId, seen: new Set(), pending: new Set() });
     try { this.update(sessionID, tools, instructions); }
     catch (error) { this.sessions.delete(sessionID); throw error; }
   }
@@ -89,6 +94,7 @@ export class StructuredToolBroker {
     const expected = Buffer.from('Bearer ' + this.token);
     const supplied = Buffer.from(typeof req.headers.authorization === 'string' ? req.headers.authorization : '');
     if (req.headers.origin || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      this.trace('auth-rejected');
       reply(res, 401, { error: 'Unauthorized' }); return;
     }
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -98,32 +104,46 @@ export class StructuredToolBroker {
       reply(res, 200, { tools: [...session.tools.values()], instructions: session.instructions }); return;
     }
     if (url.pathname !== '/call' || req.method !== 'POST') {
+      this.trace('route-rejected', {}, 'debug');
       reply(res, 404, { error: 'Not found' }); return;
     }
     const buffers = [];
     let bytes = 0;
     for await (const fragment of req) {
       bytes += fragment.length;
-      if (bytes > MAX_BYTES) { reply(res, 413, { error: 'Tool arguments too large' }); return; }
+      if (bytes > MAX_BYTES) {
+        this.trace('request-too-large');
+        reply(res, 413, { error: 'Tool arguments too large' }); return;
+      }
       buffers.push(fragment);
     }
     let input;
     try { input = JSON.parse(Buffer.concat(buffers).toString('utf8')); }
-    catch { reply(res, 400, { error: 'Invalid JSON' }); return; }
+    catch {
+      this.trace('invalid-json');
+      reply(res, 400, { error: 'Invalid JSON' }); return;
+    }
     if (!object(input) || !identity(input.sessionID) || !identity(input.callID) || !identity(input.messageID)
       || !toolName(input.name) || !object(input.arguments)) {
+      this.trace('invalid-envelope');
       reply(res, 400, { error: 'Invalid tool request envelope' }); return;
     }
     const session = this.sessions.get(input.sessionID);
-    if (!session) { reply(res, 404, { error: 'Inactive session' }); return; }
+    if (!session) {
+      this.trace('inactive-session');
+      reply(res, 404, { error: 'Inactive session' }); return;
+    }
     if (!session.tools.has(input.name)) {
+      this.trace('catalog-rejected', { sessionId: session.dshSessionId, tool: input.name });
       reply(res, 422, { error: 'Tool is not in the current DSH catalog; use a declared name' }); return;
     }
     const key = JSON.stringify([input.messageID, input.callID]);
     if (session.seen.has(key)) {
+      this.trace('duplicate-blocked', { sessionId: session.dshSessionId, tool: input.name });
       reply(res, 409, { error: 'Duplicate tool request; never replay a call' }); return;
     }
     if (session.seen.size >= 128 || session.pending.size >= 8) {
+      this.trace('call-limit', { sessionId: session.dshSessionId });
       reply(res, 429, { error: 'Too many tool calls' }); return;
     }
     const callId = 'call_' + randomUUID();
@@ -134,6 +154,7 @@ export class StructuredToolBroker {
     res.on('close', () => {
       if (this.calls.delete(callId)) {
         session.pending.delete(callId);
+        this.trace('callback-disconnected', { sessionId: session.dshSessionId });
         session.onDisconnect?.(callId);
       }
     });
@@ -142,6 +163,7 @@ export class StructuredToolBroker {
     try { session.onCall(call); }
     catch {
       this.calls.delete(callId); session.pending.delete(callId);
+      this.trace('handoff-unavailable', { sessionId: session.dshSessionId }, 'error');
       reply(res, 503, { error: 'DSH tool handoff is unavailable' });
     }
   }
@@ -149,6 +171,7 @@ export class StructuredToolBroker {
   settle(sessionID, callId, result) {
     const pending = this.calls.get(callId);
     if (!pending || pending.sessionID !== sessionID) {
+      this.trace('result-mismatch', {}, 'warn');
       throw failure('Tool result does not match a pending DSH call', 'TOOL_RESULT_MISMATCH');
     }
     if (!object(result) || typeof result.isError !== 'boolean'
@@ -157,6 +180,7 @@ export class StructuredToolBroker {
     }
     const serialized = JSON.stringify(result);
     if (Buffer.byteLength(serialized) > 2 * MAX_BYTES) {
+      this.trace('result-too-large', { sessionId: this.sessions.get(sessionID)?.dshSessionId });
       throw failure('Tool result is too large for structured transport', 'TOOL_RESULT_TOO_LARGE');
     }
     this.calls.delete(callId);
@@ -168,6 +192,8 @@ export class StructuredToolBroker {
     const session = this.sessions.get(sessionID);
     if (!session) return;
     this.sessions.delete(sessionID);
+    if (session.pending.size) this.trace('pending-cancelled',
+      { sessionId: session.dshSessionId, count: session.pending.size }, 'warn');
     for (const callId of session.pending) {
       const pending = this.calls.get(callId);
       this.calls.delete(callId);

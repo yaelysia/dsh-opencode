@@ -11,7 +11,8 @@ const consume = async stream => { const chunks = []; for await (const item of st
 const answer = chunks => chunks.findLast(item => item.type === 'block-end'
   && item.block.type === 'text')?.block.text;
 
-async function fixture({ compactResponse = true, summaryHistory, limits = { context: 8192, input: 7000, output: 512 } } = {}) {
+async function fixture({ compactResponse = true, summaryHistory,
+  diagnostics, limits = { context: 8192, input: 7000, output: 512 } } = {}) {
   const broker = new StructuredToolBroker();
   const actions = [];
   let sessionIndex = 0, messageIndex = 0;
@@ -55,8 +56,11 @@ async function fixture({ compactResponse = true, summaryHistory, limits = { cont
     }
     throw Error('Unknown URL ' + url);
   };
-  const adapter = createStructuredAdapter({ timeoutMs: 1000, structuredHandoffTimeoutMs: 1000 },
-    broker, modelFetch);
+  const adapter = createStructuredAdapter({
+    timeoutMs: 1000, structuredHandoffTimeoutMs: 1000,
+    diagnosticEvent: (category, code, details) => diagnostics?.events.push({ category, code, details }),
+    diagnosticContext: (sessionId, context) => diagnostics?.contexts.push({ sessionId, ...context }),
+  }, broker, modelFetch);
   const invoke = async (sessionId, messages, extra = {}) => {
     const prepared = await adapter.prepareCall(provider, model);
     return consume(prepared.stream({ provider, model, sessionId, messages, tools: [], ...extra }));
@@ -167,4 +171,28 @@ test('internal compaction assistant events are not user-visible reasoning/text',
     type: 'text', sessionID: 'sess', text: 'Visible' } });
   assert.deepEqual(parts.map(p => p.text), ['Visible']);
   assert.equal(dangerous.length, 0);
+});
+
+test('diagnostics reflect model context, Session reuse and actual compaction lifecycle', async () => {
+  const diagnostics = { events: [], contexts: [] };
+  const f = await fixture({ diagnostics });
+  try {
+    const first = [user('first')];
+    await f.invoke('dsh-diagnostic-case', first);
+    assert.ok(diagnostics.events.some(e => e.category === 'session' && e.code === 'created'));
+    assert.ok(diagnostics.events.some(e => e.category === 'context' && e.code === 'usage.updated'
+      && e.details.used === 6010 && e.details.limit === 8192));
+    const second = [...first, assistant('answer-1'), user('next')];
+    await f.invoke('dsh-diagnostic-case', second);
+    assert.ok(diagnostics.events.some(e => e.category === 'session' && e.code === 'reused'));
+    assert.ok(diagnostics.events.some(e => e.category === 'compaction' && e.code === 'started'));
+    assert.ok(diagnostics.events.some(e => e.category === 'compaction' && e.code === 'finished'));
+    assert.ok(diagnostics.contexts.some(c => c.phase === 'compacting'));
+    assert.deepEqual(diagnostics.contexts.at(-1),
+      { sessionId: 'dsh-diagnostic-case', used: 6010, limit: 8192,
+        phase: 'ready', estimate: true });
+    const texts = JSON.stringify(diagnostics.events);
+    assert.doesNotMatch(texts, /first|next|answer-1/,
+      'diagnostic trace cannot include user questions or complete model answers');
+  } finally { await f.close(); }
 });

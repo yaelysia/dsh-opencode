@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { failure, providerFailure } from './errors.js';
+import { ContextBudget } from './context-budget.js';
 import { localSessionTitle } from './title.js';
 import { BRIDGE_AGENT_ID, requireBridgeAgent } from './managed-agent.js';
 import { openSessionEvents, SessionEventAccumulator } from './opencode-events.js';
@@ -434,6 +435,10 @@ export function createAdapter(config = {}, fetchImpl) {
   const models = [...new Set((Array.isArray(config.models) ? config.models : DEFAULT_MODELS)
     .filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))];
   const client = new OpenCodeServeClient(config, fetchImpl);
+  // The stock DSH ContextMeter becomes visible only when the adapter declares
+  // contextWindow in prepareCall(). Do not paint a second context widget.
+  const capacity = config.structuredToolsEnabled === true
+    ? new ContextBudget(client, { ttlMs: 120_000, logger: config.logger }) : null;
   const entry = id => ({ provider, id, name: id, inputModalities: ['text'] });
   return {
     providerInfo: () => ({ id: provider, name: 'OpenCode (official serve)' }),
@@ -444,9 +449,18 @@ export function createAdapter(config = {}, fetchImpl) {
       if (p !== provider || !models.includes(id)) throw failure('Unsupported OpenCode model: ' + id, 'MODEL_NOT_FOUND');
       return entry(id);
     },
-    async prepareCall(p, id) {
+    async prepareCall(p, id, signal) {
       const model = this.resolveModel(p, id);
-      return { model, async *stream(options) {
+      let window;
+      if (capacity) {
+        // Explicitly ready the owned process before reading its model catalog:
+        // this is the same lifecycle guard used during real model generation.
+        await client.ensureService?.({ requireManaged: true });
+        window = await capacity.limit(id, signal);
+      }
+      const resolved = window
+        ? { ...model, context: { contextWindow: window.context } } : model;
+      return { model: resolved, async *stream(options) {
         // A title is a local label, not another cloud inference or a fallback model.
         if (config.localTitles !== false && options?.purpose === 'session-title') {
           if (options.signal?.aborted) throw failure('Title request cancelled', 'ABORTED');
