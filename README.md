@@ -2,11 +2,11 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前：0.2.0-alpha.19（开发中，待实机验收）。** 在已通过实机验收的 alpha.18 结构化 `dsh_call` 通道上，新增可校验的跨轮 Session 复用与内存生命周期状态。旧通道继续保留；当前版本的回归集成测试使用固定 OpenCode 1.19.3 和本地模拟模型，真实免费网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前开发分支：0.2.0-alpha.20（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
-环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）及 Node.js >=22.19.0。**无需独立安装 OpenCode CLI**：本插件固定依赖官方 `opencode-ai@1.19.3`，安装时由 DSH 包管理器一并获取对应的平台二进制。运行时不会自行下载或升级。
+环境要求：DSH 0.2.x（对照 0.2.1-rc.2 Desktop）及 Node.js >=22.19.0。**无需独立安装 OpenCode CLI**：本插件直接声明官方平台原生二进制 npm 包（固定为 OpenCode `1.19.3`），由 DSH 的包管理器按系统选择，不再安装 `opencode-ai` 包装器或运行其 `postinstall.mjs`。运行时不会自行下载或升级。
 
 在 DSH 插件页以 Git 来源安装：
 
@@ -24,9 +24,11 @@ git+https://github.com/yaelysia/dsh-opencode.git#master
 
 ## 内置固定版本 OpenCode CLI
 
-`opencode-ai@1.19.3` 作为普通运行依赖，其官方可选依赖提供各平台原生二进制。插件直接解析二进制，不依赖全局 npm shim、手工硬链接或安装后脚本；x64 优先使用 baseline 变体以兼容不支持 AVX2 的 CPU。
+直接将官方 `opencode-windows-*`、`opencode-linux-*`、`opencode-darwin-*` 原生包作为**固定版本可选依赖**（`1.19.3`），由 npm/pnpm 依据 OS/CPU/libc 安装对应版本；插件直接解析其 `bin/opencode(.exe)`，不依赖全局 npm shim、手工硬链接或安装后脚本。x64 优先使用 baseline 变体以兼容不支持 AVX2 的 CPU。
 
-安装或更新插件时需要包管理器能获取 npm 依赖，首次安装会增加 CLI 下载体积。插件运行时不会自动下载或升级。若 CLI 可选依赖缺失或版本不一致，将明确报错，不会偷偷使用全局 OpenCode 或 Desktop 内置版本。已安装的旧插件请更新/重装后完整退出并重启 DSH。
+安装或更新插件时需要包管理器能获取 npm 依赖，首次安装会增加 CLI 下载体积。插件运行时不会自动下载或升级。若原生可选依赖缺失或版本不一致，将明确报错，不会偷偷使用全局 OpenCode 或 Desktop 内置版本。已安装的旧插件请更新/重装后完整退出并重启 DSH。
+
+**alpha.20 安装修复：** 此前通过 `opencode-ai@1.19.3` 间接安装原生包时，其 `postinstall.mjs` 会在某些 DSH Desktop / pnpm 环境中报“failed to install the right opencode CLI package”，导致整个插件安装失败。当前版本移除该包装器并直接依赖官方原生 npm 包。CI 同时覆盖启用和禁用 install scripts 的 pnpm 安装，不需要手动安装 OpenCode CLI，也无需修改 DSH 全局脚本权限。
 
 **Windows 安装目录提醒：** 曾有 DSH 安装目录的文件 ACL 与 Windows 低完整性沙箱冲突，造成 PTC Worker 和 `pwsh` 权限异常。该案例通过将 DSH 安装到非原默认目录得到解决，与 `dsh_call` 无关。遇到类似 `EPERM` 请先检查安装目录权限，不要递归重置系统目录 ACL，也不要长期关闭沙箱。
 
@@ -54,7 +56,16 @@ OpenCode 的工具回调等待 DSH 结果时，适配器先结束当前 DSH 模�
 
 相同 DSH 会话、模型和任务类型，在一次 OpenCode 回复**完整成功**后会保留已完成的 OpenCode Session。下一轮只有在 DSH 历史前缀与系统指令均匹配、且收到新的用户消息时才复用，**只发送新增用户消息**；旧助手回复、`dsh_call` 请求和已经执行的工具结果不会重复注入。对相同已完成输入的重试会返回 `STALE_DSH_TURN`，不会生成第二次模型操作。
 
-DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败、被取消时，插件会废弃复用映射并新建 Session。状态分为执行中、等待工具结果和空闲；仅空闲的映射进入内存缓存，最多保留 32 个（淘汰仅移除内存索引）。当前**不持久化会话映射，也不会主动删除 OpenCode 磁盘 Session**；持久化回收、上下文预算与压缩将在后续版本独立实现。DSH 始终是对话历史的权威来源。
+DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败、被取消时，插件会废弃复用映射并新建 Session。状态分为执行中、等待工具结果和空闲；仅空闲的映射可回收，最多保留 32 个。alpha.20 新增自动删除已过期且确认为插件所有的 OpenCode Session；**不会持久化 DSH 对话历史**。DSH 始终是对话历史的权威来源。
+
+## 上下文预算、原生压缩与 Session 回收（alpha.20）
+
+- **上下文限额：** 优先从 OpenCode `GET /provider` 的实际模型目录读取 `limit.context/input/output`，10 分钟内缓存；不将 DeepSeek Flash 写死为 256K。依据上轮模型实际 Token 用量（含缓存 Token）与新增消息/系统指令/工具目录的保守估算，在安全输入窗口的约 78% 提前触发原生压缩。目录不可用时，不猜限额，仍依赖 OpenCode 内置溢出处理。
+- **压缩归属：** 插件仅在完整结束的可复用 Session 下一轮发送新消息前，调用 OpenCode `POST /session/:id/summarize`。压缩期间 DSH 工具目录明确为空，不能使用 `dsh_call` 执行工作区动作；压缩内部的 assistant/summary 流事件不展示给 DSH。压缩失败明确返回 `CONTEXT_COMPACTION_FAILED`，丢弃不确定的 OpenCode 复用状态，**不会修改、裁剪 DSH 的原始历史**。单次新输入本身超过安全预算返回 `CONTEXT_LIMIT_EXCEEDED`。
+- **Session 回收：** 保留最近最多 32 个空闲映射，空闲 30 分钟过期；每分钟轻量检查一次。淘汰或 DSH 历史改变时，通过 `DELETE /session/:id` 删除确认由本插件创建的、已空闲的 Session。匿名会话完成即回收；取消/失败仅在后台请求停止后回收。等待 DSH 审批的 Session **绝不清理**。
+- **异常重启恢复：** 插件运行目录的 `dsh-opencode-sessions/` 保存仅包含 OpenCode ID、进程 PID、实例标识、时间戳的原子 JSON 记录，不保存消息或摘要。下次启动仅尝试清理前一持有者进程已确认退出的自有 Session；未知或仍存活的持有者不清理。残留清理后台并发最多 2 项，不阻塞首次对话；插件退出时停止派发新清理任务，未处理和删除失败的记录保留至下次启动。写入日志失败会导致崩溃后无法自动定位该 Session，属于尽力恢复而非强一致保证。不会扫描或删除用户独立的 OpenCode 会话。
+
+压缩会进行额外模型请求，免费模型网关可能拒绝；真实 DeepSeek/GLM 压缩兼容性与耗时须在 Desktop 验收。模型目录和近似 Token 估算不能保证提前预测所有上游限流，保留上游原生溢出处理作为后备。
 
 ## 工具结果之后的上游失败与重试安全
 

@@ -31,12 +31,21 @@ function mockModel() {
       const body = JSON.parse(raw);
       const results = body.messages.filter(m => m.role === 'tool');
       const system = body.messages.filter(m => m.role === 'system').map(m => m.content);
+      // The native compaction prompt is the last user message and contains
+      // OpenCode's <conversation> template, even when earlier history remains.
+      const latestUser = body.messages.findLast(m => m.role === 'user');
+      const compaction = /<conversation>|<template>|<prior-summary>/i
+        .test(JSON.stringify(latestUser?.content ?? ''));
       const ptc = body.messages.some(m => m.role === 'user'
         && JSON.stringify(m.content).includes('PTC_INTEGRATION_CASE'));
       const nativeProbe = body.messages.some(m => m.role === 'user'
         && JSON.stringify(m.content).includes('DSH_NATIVE_SHELL_PROBE'));
-      records.push({ advertised: body.tools.map(t => t.function.name), count: results.length,
-        results: results.map(m => m.content), system, ptc, nativeProbe,
+      if (compaction) console.info('LOCAL_COMPACTION_MODEL_REQUEST ' + JSON.stringify({
+        toolNames: (body.tools ?? []).map(t => t.function.name),
+        promptPrefix: JSON.stringify(latestUser?.content ?? '').slice(0, 130),
+      }));
+      records.push({ advertised: (body.tools ?? []).map(t => t.function.name), count: results.length,
+        results: results.map(m => m.content), system, ptc, nativeProbe, compaction,
         userPrompts: body.messages.filter(m => m.role === 'user').map(m => JSON.stringify(m.content)) });
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const frame = (delta, finish_reason = null) => res.write('data: ' + JSON.stringify({
@@ -44,6 +53,12 @@ function mockModel() {
         choices: [{ index: 0, delta, finish_reason }],
       }) + '\n\n');
       frame({ role: 'assistant' });
+      if (compaction) {
+        frame({ content: 'COMPACTED_SUMMARY_SENTINEL: DSH tool calls were already processed.' });
+        frame({}, 'stop');
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       if (nativeProbe) {
         if (results.length) {
           frame({ content: 'The native shell call was rejected by the DSH tool guard.' });
@@ -115,7 +130,8 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
   const config = { endpoint: 'http://127.0.0.1:' + port, backendProviderId: 'local', models: [model],
     opencodeExecutable: path.resolve(process.env.OPENCODE_TEST_EXE), runtimeRoot: path.join(root, 'runtime'),
     autoStartTimeoutMs: process.platform === 'win32' ? 120000 : 60000,
-    timeoutMs: 20000, structuredHandoffTimeoutMs: 10000, ssePreviewEnabled: true,
+    timeoutMs: 20000, structuredHandoffTimeoutMs: 10000,
+    compactionTimeoutMs: 15000, ssePreviewEnabled: true,
   };
   const service = new StructuredOpenCodeService(config, { broker, logger: { info() {}, warn() {} },
     spawnImpl(exe, args, options) {
@@ -256,7 +272,7 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
         String(text).includes('DSH_STRUCTURED_NATIVE_TOOL_BLOCKED'))),
       'the plugin must block bash before the OpenCode shell executes');
     });
-    await t.test('PTC system SDK is sent once and run_code crosses the real OpenCode plugin', async () => {
+    await t.test('PTC system SDK is sent once and run_code crosses the real OpenCode plugin', async t => {
       const ptcTools = [{ name: 'run_code', parameters: {
         type: 'object', properties: {
           description: { type: 'string' }, code: { type: 'string' },
@@ -288,7 +304,28 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
       assert.equal(afterHandoff.at(-1).reason.kind, 'stop');
       assert.equal(afterHandoff.some(c => c.type === 'tool-call-delta'), false);
       assert.equal(adapter.runtime.sessions.entries.get(JSON.stringify(['ptc', model, 'chat']))?.state, 'idle');
-      const requests = mock.records.slice(before).filter(r => r.ptc);
+      await t.test('native /summarize compacts the retained real OpenCode Session with no DSH tool catalog', async () => {
+        const key = JSON.stringify(['ptc', model, 'chat']);
+        const previous = adapter.runtime.sessions.entries.get(key);
+        assert.equal(previous?.state, 'idle');
+        previous.lastUsage = 30000; // Force a deterministic near-limit preflight.
+        const beforeCompaction = mock.records.length;
+        const compacted = await invoke('ptc', [ptcUser,
+          { role: 'tool', toolCallId: call.id, isError: false,
+            content: [{ type: 'text', text: '["text.txt"]' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'PTC handoff completed through DSH.' }] },
+          { role: 'user', content: [{ type: 'text', text: 'Any final observations?' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'PTC handoff completed through DSH.' }] },
+          { role: 'user', content: [{ type: 'text', text: 'Continue after compaction.' }] },
+        ], undefined, options);
+        assert.equal(compacted.at(-1).reason.kind, 'stop');
+        assert.equal(adapter.runtime.sessions.entries.get(key)?.id, previous.id);
+        const compactRecords = mock.records.slice(beforeCompaction).filter(r => r.compaction);
+        assert.ok(compactRecords.length >= 1, 'native OpenCode /summarize must call the compaction model');
+        assert.ok(compactRecords.every(r => !r.advertised.includes('dsh_call')),
+          'compaction must not receive DSH file or shell tooling');
+      });
+      const requests = mock.records.slice(before).filter(r => r.ptc && !r.compaction);
       assert.ok(requests.length >= 2);
       for (const request of requests) {
         assert.deepEqual(request.advertised.filter(name => name === 'dsh_call'), ['dsh_call']);
@@ -299,9 +336,9 @@ test('official OpenCode structured tool handoff, resume, refusal and cancellatio
       }
     });
     assert.ok(mock.records.length >= 7);
-    assert.ok(mock.records.every(r => r.system.length === 1),
-      'managed OpenCode may not generate extra system-role messages');
-    assert.ok(mock.records.every(r => r.advertised.includes('dsh_call')));
+    assert.ok(mock.records.filter(r => !r.compaction).every(r => r.system.length === 1),
+      'normal managed OpenCode calls may not generate extra system-role messages');
+    assert.ok(mock.records.filter(r => !r.compaction).every(r => r.advertised.includes('dsh_call')));
     console.info('STRUCTURED_POC_SUMMARY ' + JSON.stringify({
       officialOpenCode: '1.19.3', cloudRequests: 0, sequence: ['glob', 'read', 'edit'],
       refusal: 'passed', cancellation: 'passed', textEnvelopes: 0, publishedDshAssembler: Boolean(dsh),

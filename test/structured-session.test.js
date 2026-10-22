@@ -51,7 +51,8 @@ test('session registry records lifecycle states and never replays a completed in
   registry.complete('a', 'oc-a', [user('one')], 'system', 'answer-one');
   assert.equal(registry.entries.get('a').state, 'idle');
   assert.deepEqual(registry.plan('a', [user('one'), assistant('answer-one'), user('two')], 'system'),
-    { id: 'oc-a', messages: [user('two')] });
+    { id: 'oc-a', messages: [user('two')], lastUsage: null });
+  registry.release('a', 'oc-a'); // A planned lease must be returned before another input.
   assert.throws(() => registry.plan('a', [user('one'), assistant('answer-one')], 'system'),
     error => error.code === 'STALE_DSH_TURN');
   registry.active('b', 'oc-b');
@@ -194,4 +195,18 @@ test('cancellation invalidates a reused session before a subsequent fresh attemp
     assert.equal(answer(third), 'reply-3');
     assert.equal(f.creates, 2, 'the cancelled, possibly dirty session must not be reused');
   } finally { await f.close(); }
+});
+
+test('completed Session stores only a fingerprint, never a full previous assistant reply', () => {
+  const registry = new StructuredSessionRegistry();
+  const first = [user('one')];
+  const longReply = 'answer-'.repeat(50000);
+  registry.active('memory', 'oc-memory');
+  registry.complete('memory', 'oc-memory', first, '', longReply);
+  const entry = registry.entries.get('memory');
+  assert.equal(Object.hasOwn(entry, 'reply'), false);
+  assert.equal(entry.replyHash.length, 64);
+  assert.deepEqual(registry.plan('memory',
+    [...first, assistant(longReply), user('follow-up')], ''),
+    { id: 'oc-memory', messages: [user('follow-up')], lastUsage: null });
 });
