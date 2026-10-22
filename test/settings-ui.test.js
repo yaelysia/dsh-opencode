@@ -17,7 +17,7 @@ function loadClient() {
   const created = [];
   const React = { createElement(type, props, ...children) {
     return { type, props: { ...(props || {}), children } };
-  } };
+  }, useSyncExternalStore(_subscribe, getSnapshot) { return getSnapshot(); } };
   const factoryStubs = {
     SettingsForm: function SettingsForm() {},
     SettingsValueField: function SettingsValueField() {},
@@ -81,7 +81,7 @@ test('the installed bundle ships a prebuilt DSH browser half without prepare scr
 test('the DSH client factory contributes settings directly to the bundle detail page', () => {
   const { exports, created } = loadClient();
   assert.deepEqual([...exports.inject],
-    ['slots', 'locale', 'configForms', 'sidebarRight', 'sidebarRightTabs']);
+    ['slots', 'locale', 'configForms', 'sidebarRight']);
   const effects = [];
   let registration, dictionaries, watched;
   const scope = { getSnapshot: () => ({ value: {
@@ -237,70 +237,61 @@ test('configuration page blocks an invalid guarded-read and auto-start combinati
   assert.equal(state.invalid, false);
 });
 
-test('diagnostic view extends model-adjacent composer and custom Sidebar tab without replacement', () => {
+test('diagnostics shortcut mounts while ConfigMirror is loading and opens the native DSH Browser', () => {
   const { exports } = loadClient();
-  const registered = [], kinds = [], opened = [];
+  const registered = [], opened = [];
+  const config = { current: { status: 'loading', value: undefined } };
+  const form = { getSnapshot: () => config.current, subscribe: () => () => {} };
   const ctx = {
     effect(fn) { fn(); },
     locale: { bind: () => key => key, register: () => () => {} },
-    configForms: {
-      get: () => ({ getSnapshot: () => ({ value: { diagnosticsEnabled: true, structuredToolsEnabled: true, diagnosticsPort: 4107 } }) }),
-      whileServed: (_ids, register) => register(),
-    },
-    sidebarRightTabs: { register(definition) { kinds.push(definition); return () => {}; } },
-    sidebarRight: { openTab(kind) { opened.push(kind); } },
-    slots: { inject(name, attach) { return attach(); },
+    configForms: { get: () => form, whileServed: (_ids, register) => register() },
+    sidebarRight: { openTab(kind, options) { opened.push({ kind, options }); } },
+    slots: { inject(_name, attach) { return attach(); },
       register(opts, component) { registered.push({ opts, component }); return () => {}; } },
   };
   exports.apply(ctx);
-  assert.equal(kinds.length, 1);
-  assert.equal(kinds[0].kind, 'dsh-opencode-diagnostics');
   const right = registered.find(x => x.opts.name === 'conversation.input.right');
-  const pane = registered.find(x => x.opts.name === 'sidebar.right.pane.tab');
-  assert.ok(right);
-  assert.ok(pane);
-  assert.equal(right.opts.id, 'dsh-opencode-context');
-  assert.equal(pane.opts.key, 'dsh-opencode/diagnostics');
-  const injected = right.opts.inject('some-dsh-session');
-  assert.equal(injected.port, 4107);
+  assert.ok(right, 'UI slot must register before settings become available');
+  assert.equal(right.opts.id, 'dsh-opencode-diagnostics');
+  const injected = right.opts.inject('dsh-session');
   const badge = right.component(injected);
-  const children = badge.props.children.flat();
-  const iframe = children.find(item => item.type === 'iframe');
-  assert.equal(iframe.props.src,
-    'http://127.0.0.1:4107/v1/badge?sid=some-dsh-session');
-  assert.equal(iframe.props.sandbox, 'allow-scripts allow-same-origin');
-  const open = children.find(item => item.type === 'button');
-  open.props.onClick();
-  assert.deepEqual(opened, ['dsh-opencode-diagnostics']);
-  const panelInjected = pane.opts.inject('same-session');
-  assert.equal(panelInjected.sessionId, 'same-session');
-  const panelView = pane.component(panelInjected);
-  assert.equal(panelView.props.src,
-    'http://127.0.0.1:4107/v1/page?sid=same-session');
-  assert.match(panelView.props.sandbox, /allow-downloads/,
-    'read-only logs panel must permit intentional JSONL export');
+  const elements = badge.props.children.flat();
+  const iframe = elements.find(e => e.type === 'iframe');
+  assert.equal(iframe.props.src, 'http://127.0.0.1:4097/v1/badge?sid=dsh-session');
+  assert.ok(elements.some(e => e.type === 'button'));
+  config.current = { status: 'ready', value: {
+    structuredToolsEnabled: true, diagnosticsEnabled: true, diagnosticsPort: 4107,
+  } };
+  const updated = right.component(injected).props.children.flat();
+  assert.equal(updated.find(e => e.type === 'iframe').props.src,
+    'http://127.0.0.1:4107/v1/badge?sid=dsh-session');
+  updated.find(e => e.type === 'button').props.onClick();
+  assert.deepEqual(opened, [{ kind: 'browser',
+    options: { params: { url: 'http://127.0.0.1:4107/v1/page?sid=dsh-session' } } }]);
+  assert.equal(registered.some(x => x.opts.name === 'sidebar.right.pane.tab'), false,
+    'use the supported Browser type, do not mount a custom iframe inside Sidebar');
 });
 
-test('diagnostic UI does not mount in legacy mode or when switched off', () => {
+test('diagnostics shortcut reacts to disabled settings instead of suppressing initial registration', () => {
   const { exports } = loadClient();
   for (const settings of [
     { diagnosticsEnabled: false, structuredToolsEnabled: true },
     { diagnosticsEnabled: true, structuredToolsEnabled: false },
   ]) {
     const registered = [];
+    const form = { getSnapshot: () => ({ value: settings }), subscribe: () => () => {} };
     exports.apply({
       effect(fn) { fn(); },
       locale: { bind: () => key => key, register: () => () => {} },
-      configForms: {
-        get: () => ({ getSnapshot: () => ({ value: settings }) }),
-        whileServed: (_ids, register) => register(),
-      },
-      sidebarRightTabs: { register(definition) { registered.push(definition); return () => {}; } },
+      configForms: { get: () => form, whileServed: (_ids, register) => register() },
       sidebarRight: { openTab() {} },
       slots: { inject(_name, attach) { return attach(); },
-        register(opts) { registered.push(opts); return () => {}; } },
+        register(opts, component) { registered.push({ opts, component }); return () => {}; } },
     });
-    assert.equal(registered.some(x => x.name === 'conversation.input.right'), false);
-    assert.equal(registered.some(x => x.kind === 'dsh-opencode-diagnostics'), false);
+    const right = registered.find(x => x.opts.name === 'conversation.input.right');
+    assert.ok(right, 'register once regardless of startup snapshot');
+    assert.equal(right.component(right.opts.inject('s')), null,
+      'do not render a shortcut for a disabled feature');
   }
 });
