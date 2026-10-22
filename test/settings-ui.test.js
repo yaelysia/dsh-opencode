@@ -74,6 +74,7 @@ test('the installed bundle ships a prebuilt DSH browser half without prepare scr
     '@deepseek-ai/dsh-client-ui-plugin-manager',
     '@deepseek-ai/dsh-client-ui-conversation',
     '@deepseek-ai/dsh-client-ui-sidebar-right',
+    '@deepseek-ai/dsh-client-ui-model-selection',
   ]);
   assert.equal(manifest.scripts?.prepare, undefined);
 });
@@ -237,61 +238,111 @@ test('configuration page blocks an invalid guarded-read and auto-start combinati
   assert.equal(state.invalid, false);
 });
 
-test('diagnostics shortcut mounts while ConfigMirror is loading and opens the native DSH Browser', () => {
+test('OpenCode dock mounts below composer, after native context ring, and opens Sidebar Browser', () => {
   const { exports } = loadClient();
   const registered = [], opened = [];
   const config = { current: { status: 'loading', value: undefined } };
+  const selected = { current: { status: 'ready',
+    current: { provider: 'opencode-serve', model: 'deepseek-v4.1-flash-free' } } };
   const form = { getSnapshot: () => config.current, subscribe: () => () => {} };
+  const directory = { getSnapshot: () => selected.current, subscribe: () => () => {} };
   const ctx = {
     effect(fn) { fn(); },
     locale: { bind: () => key => key, register: () => () => {} },
     configForms: { get: () => form, whileServed: (_ids, register) => register() },
+    modelDirectories: { directoryFor: sessionId => {
+      assert.equal(sessionId, 'dsh-session');
+      return { store: directory };
+    } },
     sidebarRight: { openTab(kind, options) { opened.push({ kind, options }); } },
     slots: { inject(_name, attach) { return attach(); },
       register(opts, component) { registered.push({ opts, component }); return () => {}; } },
+    inject(services, cb) {
+      assert.equal(services[0], 'modelDirectories');
+      return cb(ctx);
+    },
   };
   exports.apply(ctx);
-  const right = registered.find(x => x.opts.name === 'conversation.input.right');
-  assert.ok(right, 'UI slot must register before settings become available');
-  assert.equal(right.opts.id, 'dsh-opencode-diagnostics');
-  const injected = right.opts.inject('dsh-session');
-  const badge = right.component(injected);
-  const elements = badge.props.children.flat();
-  const iframe = elements.find(e => e.type === 'iframe');
-  assert.equal(iframe.props.src, 'http://127.0.0.1:4097/v1/badge?sid=dsh-session');
-  assert.ok(elements.some(e => e.type === 'button'));
+  const dock = registered.find(x => x.opts.name === 'conversation.composer.dock');
+  assert.ok(dock, 'Dock slot must register before accepted settings hydrate');
+  assert.equal(dock.opts.id, 'dsh-opencode-diagnostics');
+  assert.equal(registered.some(x => x.opts.name === 'conversation.input.right'), false);
+  const injected = dock.opts.inject('dsh-session');
+  const reading = dock.component(injected);
+  assert.equal(reading.props.style.order, 10,
+    'CSS order must position the control after native ContextMeter');
+  const elements = reading.props.children.flat();
+  assert.equal(elements.find(x => x.type === 'iframe').props.src,
+    'http://127.0.0.1:4097/v1/badge?sid=dsh-session');
   config.current = { status: 'ready', value: {
     structuredToolsEnabled: true, diagnosticsEnabled: true, diagnosticsPort: 4107,
   } };
-  const updated = right.component(injected).props.children.flat();
+  const updated = dock.component(injected).props.children.flat();
   assert.equal(updated.find(e => e.type === 'iframe').props.src,
     'http://127.0.0.1:4107/v1/badge?sid=dsh-session');
   updated.find(e => e.type === 'button').props.onClick();
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{ kind: 'browser',
     options: { params: { url: 'http://127.0.0.1:4107/v1/page?sid=dsh-session' } } }]);
-  assert.equal(registered.some(x => x.opts.name === 'sidebar.right.pane.tab'), false,
-    'use the supported Browser type, do not mount a custom iframe inside Sidebar');
 });
 
-test('diagnostics shortcut reacts to disabled settings instead of suppressing initial registration', () => {
+test('OpenCode dock follows live session-specific provider and disappears on model switch', () => {
+  const { exports } = loadClient();
+  const entries = [], form = { getSnapshot: () => ({ value: {
+    structuredToolsEnabled: true, diagnosticsEnabled: true,
+  } }), subscribe: () => () => {} };
+  const selections = {
+    a: { status: 'ready', current: { provider: 'opencode-serve', model: 'glm-5.3-flash-free' } },
+    b: { status: 'ready', current: { provider: 'openai-codex', model: 'gpt-5.6-sol' } },
+  };
+  const ctx = {
+    effect(fn) { fn(); },
+    locale: { bind: () => key => key, register: () => () => {} },
+    configForms: { get: () => form, whileServed: (_ids, register) => register() },
+    modelDirectories: { directoryFor: sid => ({ store: {
+      subscribe: () => () => {}, getSnapshot: () => selections[sid],
+    } }) },
+    sidebarRight: { openTab() {} },
+    slots: { inject(_name, attach) { return attach(); },
+      register(opts, component) { entries.push({ opts, component }); return () => {}; } },
+    inject(_services, cb) { cb(ctx); },
+  };
+  exports.apply(ctx);
+  const { opts, component } = entries.find(e => e.opts.name === 'conversation.composer.dock');
+  assert.ok(component(opts.inject('a')), 'our provider is eligible');
+  assert.equal(component(opts.inject('b')), null, 'another provider is never eligible');
+  selections.a = { status: 'ready', current: { provider: 'openai-codex', model: 'gpt-5.6-sol' } };
+  assert.equal(component(opts.inject('a')), null, 'a model switch must immediately remove the dock');
+  selections.a = { status: 'loading', current: { provider: 'opencode-serve', model: 'glm-5.3-flash-free' } };
+  assert.equal(component(opts.inject('a')), null, 'unknown selected model must not leak old status');
+  selections.a = { status: 'ready', current: { provider: 'opencode-serve', model: 'glm-5.3-flash-free' } };
+  assert.ok(component(opts.inject('a')));
+});
+
+test('diagnostics dock hides when feature disabled without disturbing non-diagnostics slots', () => {
   const { exports } = loadClient();
   for (const settings of [
     { diagnosticsEnabled: false, structuredToolsEnabled: true },
     { diagnosticsEnabled: true, structuredToolsEnabled: false },
   ]) {
-    const registered = [];
+    const entries = [];
     const form = { getSnapshot: () => ({ value: settings }), subscribe: () => () => {} };
-    exports.apply({
+    const ctx = {
       effect(fn) { fn(); },
       locale: { bind: () => key => key, register: () => () => {} },
       configForms: { get: () => form, whileServed: (_ids, register) => register() },
+      modelDirectories: { directoryFor: () => ({ store: {
+        getSnapshot: () => ({ status: 'ready',
+          current: { provider: 'opencode-serve', model: 'glm-5.3-flash-free' } }),
+        subscribe: () => () => {},
+      } }) },
       sidebarRight: { openTab() {} },
       slots: { inject(_name, attach) { return attach(); },
-        register(opts, component) { registered.push({ opts, component }); return () => {}; } },
-    });
-    const right = registered.find(x => x.opts.name === 'conversation.input.right');
-    assert.ok(right, 'register once regardless of startup snapshot');
-    assert.equal(right.component(right.opts.inject('s')), null,
-      'do not render a shortcut for a disabled feature');
+        register(opts, component) { entries.push({ opts, component }); return () => {}; } },
+      inject(_services, cb) { cb(ctx); },
+    };
+    exports.apply(ctx);
+    const dock = entries.find(e => e.opts.name === 'conversation.composer.dock');
+    assert.ok(dock);
+    assert.equal(dock.component(dock.opts.inject('s')), null);
   }
 });
