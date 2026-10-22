@@ -191,6 +191,11 @@ export class StructuredAdapterRuntime {
     const terminal = afterToolFailure(error, turn.handedOff);
     turn.error = terminal;
     this.trace(terminal?.code === 'ABORTED' ? 'session' : 'provider', 'turn.failed', { sessionId: turn.dshSessionId, errorCode: terminal?.code || terminal?.failure?.code || 'TRANSPORT', httpStatus: terminal?.failure?.status }, 'warn');
+    if (terminal?.code === 'CLIENT_RESTRICTED') {
+      this.trace('provider', 'zen.free-access-restricted',
+        { sessionId: turn.dshSessionId, model: turn.model,
+          errorCode: 'CLIENT_RESTRICTED', httpStatus: terminal?.failure?.status }, 'error');
+    }
     // A model timeout is not proof of a dead server. Probe the local health
     // endpoint before considering a restart; never react to upstream 429.
     if (['TRANSPORT', 'TIMEOUT', 'TOOL_TRANSPORT_CLOSED'].includes(error?.code)
@@ -304,7 +309,7 @@ export class StructuredAdapterRuntime {
       }
       turn = { id, key, queue: [], wake: null, dshSessionId: options.sessionId,
         dshMessages: options.messages ?? [], system, reply: '', completed: false,
-        lastUsage: null, contextLimit,
+        lastUsage: null, contextLimit, model: options.model,
         controller: new AbortController(), timer: null, waiting: null, streaming: false,
         closed: false, finished: false, error: null, delivered: new Map(),
         handedOff: false, lastCallId: null };
