@@ -23,6 +23,8 @@ export class SessionJournal {
     this.owned = new Set();
     this.pending = new Map();
     this.started = null;
+    this.recovering = null;
+    this.stopping = false;
   }
 
   file(id) { return path.join(this.directory, filename(id)); }
@@ -32,6 +34,7 @@ export class SessionJournal {
     if (this.started) return this.started;
     this.started = (async () => {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      const orphans = [];
       for (const name of await readdir(this.directory)) {
         if (!/^[0-9a-f]{64}\.json$/.test(name)) continue;
         let record;
@@ -40,10 +43,18 @@ export class SessionJournal {
         if (record?.format !== 1 || !validId(record.id) || name !== filename(record.id)
           || typeof record.instance !== 'string') continue;
         if (record.pid === process.pid || this.isAlive(record.pid)) continue;
-        // Owner process is gone. A failed DELETE retains the journal entry
-        // so a later startup can retry without touching unknown sessions.
-        await this.retire(record.id, { force: true });
+        orphans.push(record.id);
       }
+      // Orphan deletion must never block the first user request. Two workers
+      // bound backend load; unfinished journal records survive plugin shutdown.
+      const worker = async () => {
+        while (!this.stopping && orphans.length) {
+          const id = orphans.shift();
+          await this.retire(id, { force: true });
+        }
+      };
+      this.recovering = Promise.allSettled(
+        Array.from({ length: Math.min(2, orphans.length) }, worker));
     })().catch(error => {
       this.logger?.warn?.('dsh-opencode: Session journal unavailable (' +
         (error.code || 'IO') + ')');
@@ -91,5 +102,10 @@ export class SessionJournal {
     return task;
   }
 
-  async drain() { await Promise.allSettled([...this.pending.values()]); }
+  async drain() {
+    this.stopping = true;
+    await this.started;
+    await this.recovering;
+    await Promise.allSettled([...this.pending.values()]);
+  }
 }
