@@ -71,6 +71,8 @@ export class OpenCodeServeClient {
     this.attributionHeaders = config.attributionHeaders ?? {};
     this.logger = config.logger;
     this.ensureService = config.ensureService;
+    this.serviceGenerationProvider = config.serviceGenerationProvider;
+    this.lastServiceGeneration = null;
     this.verifyNativeDenials = config.verifyNativeDenials;
     this.toolBridgeEnabled = config.toolBridgeEnabled !== false;
     this.guardedReadCompatibility = config.guardedReadCompatibility === true;
@@ -186,6 +188,11 @@ export class OpenCodeServeClient {
       : '');
     // Require the isolated, plugin-owned OpenCode process for tool-bearing requests.
     await this.ensureService?.({ requireManaged: tools.length > 0 });
+    const generation = this.serviceGenerationProvider?.();
+    if (generation !== undefined && generation !== this.lastServiceGeneration) {
+      this.sessions.clear(); // Never use upstream IDs from a replaced process.
+      this.lastServiceGeneration = generation;
+    }
     if (options?.signal?.aborted) throw failure('OpenCode request cancelled', 'ABORTED');
     const messages = Array.isArray(options?.messages) ? options.messages : [];
     const key = options?.sessionId ? JSON.stringify([
