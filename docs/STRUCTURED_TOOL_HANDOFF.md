@@ -174,3 +174,10 @@ Regression coverage:
 - Existing pinned 1.19.3 full bridge/guard/compaction integration and Node
   22/24 checks are retained. Desktop installation itself still requires
   user-side field acceptance.
+
+## 2026-10-22 — Alpha.21 idle retention and managed server recovery
+
+- New DSH UI field `sessionIdleHours` (integer 1–2160, default 168 = seven days); 32-idle-session LRU cap remains independent. The binding is **in memory only**; complete Desktop restart still discards the reuse mapping and rebuilds from DSH authoritative messages.
+- Owned OpenCode processes receive a low-frequency loopback health probe (30s), a second confirming probe on failure, and a serialized, rate-limited restart. Unmanaged processes are never killed. The restarted child must present the isolated `dsh-bridge` and fresh native tool guard marker before any subsequent model call.
+- On replacement, the DSH-side adapter aborts retained model requests and all pending `dsh_call` bridges, invalidates reusable Session mappings and model budget cache. Already delivered tools remain non-replayable, with their terminal errors preserved for the original call ID. Legacy adapter clears upstream incremental cache on child generation change.
+- Two restart attempts per 60s maximum. Upstream free-tier 429/restrictions are provider responses, not local liveness failures. Current steps can fail and are **not** transparently retried; next user turns recover against DSH history.
