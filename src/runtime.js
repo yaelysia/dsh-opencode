@@ -15,6 +15,8 @@ export function createPluginRuntime(config, deps = {}) {
     : new OpenCodeService(options, deps);
   const settings = { ...options,
     ...(structured ? { sessionJournalRoot: supervisor.runtimeRoot } : {}),
+    serviceGenerationProvider: () => supervisor.generation,
+    reportLocalFailure: () => supervisor.reportLocalFailure(),
     passwordProvider: () => supervisor.passwordForClient(),
     verifyNativeDenials: parts => supervisor.verifiedNativeDenials(parts),
     ensureService: ({ requireManaged } = {}) => supervisor.ready({
@@ -24,6 +26,7 @@ export function createPluginRuntime(config, deps = {}) {
   };
   const adapter = structured ? createStructuredAdapter(settings, broker, deps.fetchImpl)
     : createAdapter(settings, deps.fetchImpl);
+  supervisor.onBeforeRestart = () => adapter.runtime?.onServiceRestart();
   return {
     adapter, supervisor,
     ready: () => supervisor.ready(),

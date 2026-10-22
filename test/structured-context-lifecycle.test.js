@@ -135,7 +135,7 @@ test('idle completed Session expires and is deleted using its exact owned ID', a
     await f.invoke('idle', [user('one')]);
     const registry = f.adapter.runtime.sessions;
     const key = JSON.stringify(['idle', model, 'chat']);
-    registry.entries.get(key).lastActiveAt -= 31 * 60_000;
+    registry.entries.get(key).lastActiveAt -= 8 * 24 * 60 * 60_000;
     registry.sweep();
     await f.adapter.runtime.journal.drain();
     assert.equal(registry.entries.has(key), false);

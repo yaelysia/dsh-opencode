@@ -26,6 +26,8 @@ export const Config = Schema.object({
   opencodeExecutable: Schema.string().default('').volatile(),
   runtimeRoot: Schema.string().default('').volatile(),
   autoStartTimeoutMs: Schema.number().min(1).max(2147483647).default(15000).volatile(),
+  // Idle OpenCode sessions can be retained across days while DSH remains running.
+  sessionIdleHours: Schema.number().min(1).max(2160).default(168).volatile(),
   timeoutMs: Schema.number().min(1).max(2147483647).default(120000).volatile(),
   models: Schema.array(Schema.string()).default([...DEFAULT_MODELS]).volatile(),
 });

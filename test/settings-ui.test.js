@@ -121,7 +121,7 @@ test('the DSH client factory contributes settings directly to the bundle detail 
     'structuredToolsEnabled','guardedReadCompatibility','ssePreviewEnabled','toolBridgeEnabled',
     'localTitles','strictOwnedServer','autoStart','autoStartDirect',
     'endpoint','opencodeExecutable','runtimeRoot','username','passwordEnv',
-    'timeoutMs','autoStartTimeoutMs','models',
+    'timeoutMs','autoStartTimeoutMs','sessionIdleHours','models',
   ].sort());
   face.edit('guardedReadCompatibility', 'true');
   face.edit('ssePreviewEnabled', 'false');
@@ -135,6 +135,8 @@ test('the DSH client factory contributes settings directly to the bundle detail 
   });
   assert.ok(ui);
   assert.ok(ui.props.children?.length, 'the settings form receives actual input sections');
+  assert.match(dictionaries.zh.label_sessionIdleHours, /空闲保留/);
+  assert.match(dictionaries.zh.hint_sessionIdleHours, /7 天/);
   const nodes = [];
   const visit = node => {
     if (Array.isArray(node)) return node.forEach(visit);
@@ -187,6 +189,14 @@ test('form field parsers reject malformed values before persisting', () => {
   assert.equal(specs.timeoutMs.parse('-3'), undefined);
   assert.equal(specs.timeoutMs.parse('1.5'), undefined);
   assert.equal(specs.timeoutMs.parse('Infinity'), undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.sessionIdleHours.parse('168'))),
+    { kind: 'set', value: 168 });
+  assert.equal(specs.sessionIdleHours.parse('1.5'), undefined);
+  assert.equal(specs.sessionIdleHours.parse('-1'), undefined);
+  assert.equal(specs.sessionIdleHours.parse('2161'), undefined);
+  assert.ok(specs.sessionIdleHours.parse('2160'));
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.sessionIdleHours.parse(''))),
+    { kind: 'clear' });
   assert.deepEqual(JSON.parse(JSON.stringify(specs.models.parse('model-a\nmodel-b'))), { kind: 'set', value: ['model-a','model-b'] });
   assert.equal(specs.models.parse('model-a\nmodel-a'), undefined);
 });

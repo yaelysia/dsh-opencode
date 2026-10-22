@@ -207,3 +207,44 @@ test('the single-plugin composition owns all backend pieces and preserves legacy
     assert.equal(structured.supervisor.owned, null, 'construction does not launch an unrequested model call');
   } finally { await structured.dispose(); }
 });
+
+test('service recovery cancels pending dsh_call and never replays the consumed tool result', async () => {
+  const f = await fixture();
+  try {
+    const first = await f.invoke('recover', [user]);
+    const call = first.find(chunk => chunk.type === 'tool-call-delta');
+    assert.ok(call);
+    assert.equal(f.broker.calls.size, 1);
+    f.adapter.runtime.onServiceRestart();
+    assert.equal(f.adapter.runtime.turns.size, 0);
+    assert.equal(f.broker.calls.size, 0);
+    assert.equal(f.adapter.runtime.sessions.entries.size, 0);
+    await assert.rejects(f.invoke('recover', [user, result(call)]),
+      error => error.code === 'TOOL_CONTINUATION_FAILED');
+    assert.equal(f.posts, 1, 'the same DSH tool result must never launch a new OpenCode POST');
+  } finally { await f.close(); }
+});
+
+test('structured Session idle TTL follows the configured hours without disabling count-based LRU', async () => {
+  const broker = new StructuredToolBroker();
+  const config = { sessionIdleHours: 72, timeoutMs: 1000 };
+  const adapter = createStructuredAdapter(config, broker, async () => {
+    throw Error('No network traffic should occur');
+  });
+  try {
+    assert.equal(adapter.runtime.sessions.idleTtlMs, 72 * 3_600_000);
+    assert.equal(adapter.runtime.sessions.maxIdle, 32);
+  } finally { await adapter.runtime.dispose(); }
+});
+
+test('single DSH plugin wires managed process restart to structured Session invalidation', async () => {
+  const { createPluginRuntime } = await import('../src/runtime.js');
+  const runtime = createPluginRuntime({ structuredToolsEnabled: true, sessionIdleHours: 48 });
+  try {
+    assert.equal(typeof runtime.supervisor.onBeforeRestart, 'function');
+    assert.equal(runtime.adapter.runtime.sessions.idleTtlMs, 48 * 3_600_000);
+    runtime.adapter.runtime.sessions.active('synthetic', 'oc-synthetic');
+    await runtime.supervisor.onBeforeRestart();
+    assert.equal(runtime.adapter.runtime.sessions.entries.size, 0);
+  } finally { await runtime.dispose(); }
+});

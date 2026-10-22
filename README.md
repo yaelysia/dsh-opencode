@@ -2,7 +2,7 @@
 
 将 OpenCode 官方 `serve` 模型接入 DeepSeek Harness（DSH）。模型推理经过 OpenCode，真实工作区工具的审批和执行仍属于 DSH。
 
-**当前开发分支：0.2.0-alpha.20（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
+**当前开发分支：0.2.0-alpha.21（待实机验收）。** 基于 alpha.19 的跨轮 Session 复用，增加模型上下文预算、OpenCode 原生压缩与插件自有 Session 回收。稳定版 `master` 仍为 alpha.18；真实免费模型网关的可用性仍由服务端决定。本项目与 OpenCode 官方无隶属关系，不提供绕过免费模型限制的机制。
 
 ## 安装与使用：只需操作 DSH
 
@@ -62,10 +62,20 @@ DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败�
 
 - **上下文限额：** 优先从 OpenCode `GET /provider` 的实际模型目录读取 `limit.context/input/output`，10 分钟内缓存；不将 DeepSeek Flash 写死为 256K。依据上轮模型实际 Token 用量（含缓存 Token）与新增消息/系统指令/工具目录的保守估算，在安全输入窗口的约 78% 提前触发原生压缩。目录不可用时，不猜限额，仍依赖 OpenCode 内置溢出处理。
 - **压缩归属：** 插件仅在完整结束的可复用 Session 下一轮发送新消息前，调用 OpenCode `POST /session/:id/summarize`。压缩期间 DSH 工具目录明确为空，不能使用 `dsh_call` 执行工作区动作；压缩内部的 assistant/summary 流事件不展示给 DSH。压缩失败明确返回 `CONTEXT_COMPACTION_FAILED`，丢弃不确定的 OpenCode 复用状态，**不会修改、裁剪 DSH 的原始历史**。单次新输入本身超过安全预算返回 `CONTEXT_LIMIT_EXCEEDED`。
-- **Session 回收：** 保留最近最多 32 个空闲映射，空闲 30 分钟过期；每分钟轻量检查一次。淘汰或 DSH 历史改变时，通过 `DELETE /session/:id` 删除确认由本插件创建的、已空闲的 Session。匿名会话完成即回收；取消/失败仅在后台请求停止后回收。等待 DSH 审批的 Session **绝不清理**。
+- **Session 回收：** 保留最近最多 32 个空闲映射，空闲超过自定义时间后回收（默认 168 小时，即 7 天，支持 1～2160 小时）；每分钟轻量检查一次。淘汰或 DSH 历史改变时，通过 `DELETE /session/:id` 删除确认由本插件创建的、已空闲的 Session。匿名会话完成即回收；取消/失败仅在后台请求停止后回收。等待 DSH 审批的 Session **绝不清理**。
 - **异常重启恢复：** 插件运行目录的 `dsh-opencode-sessions/` 保存仅包含 OpenCode ID、进程 PID、实例标识、时间戳的原子 JSON 记录，不保存消息或摘要。下次启动仅尝试清理前一持有者进程已确认退出的自有 Session；未知或仍存活的持有者不清理。残留清理后台并发最多 2 项，不阻塞首次对话；插件退出时停止派发新清理任务，未处理和删除失败的记录保留至下次启动。写入日志失败会导致崩溃后无法自动定位该 Session，属于尽力恢复而非强一致保证。不会扫描或删除用户独立的 OpenCode 会话。
 
 压缩会进行额外模型请求，免费模型网关可能拒绝；真实 DeepSeek/GLM 压缩兼容性与耗时须在 Desktop 验收。模型目录和近似 Token 估算不能保证提前预测所有上游限流，保留上游原生溢出处理作为后备。
+
+## 可配置的空闲时间与 OpenCode 假活恢复（alpha.21）
+
+- **空闲时间配置：** 插件设置中的「Session 空闲保留时间（小时）」默认为 168（7 天），可设置 1～2160 小时，保存后重启 DSH 生效。空闲状态不会消耗模型调用，但 OpenCode Session 的历史仍受模型上下文上限和压缩规则约束。**最多 32 个空闲 Session 的数量限制仍有效**，即使没有超时，也可能被 LRU 淘汰。
+- **跨天范围：** 同一次 DSH Desktop 进程持续运行时，可以复用几天前的 OpenCode Session；目前仍不在 DSH 完全退出、配置重启或插件卸载之后恢复复用映射，重启后会由 DSH 权威历史重建新 Session。空闲时间设得更长**不代表跨 Desktop 重启续接**。
+- **假活检测：** 对插件实际启动的 OpenCode 子进程，每 30 秒进行低频回环 HTTP 健康探测；对于模型传输失败或超时，尽快再检查一次。连续两次本地健康检查失败才允许受控恢复，模型端的 `429`、`CLIENT_RESTRICTED` 不会被当成进程故障。健康的外部 OpenCode 进程绝不自动杀死。
+- **故障恢复：** 恢复前中止所有正在运行和等待 DSH 工具审批的旧 OpenCode 请求，释放并使其 Session 映射失效；之后只停止插件自己的子进程，重新启动并验证 `dsh-bridge` Agent 和工具阻断守卫。已经交付 DSH 的工具调用不可自动重新执行，旧工具结果再次提交仍返回终止错误。其他新用户请求根据 DSH 权威历史重建 Session。
+- **防重启风暴：** 同一进程 60 秒内最多自动恢复两次，继续异常时明确报 `SERVER_RECOVERY_COOLDOWN`；不无限重启，也不会绕过 DSH 的执行权限。后台健康检查使用不保留事件循环的计时器。
+
+此功能不承诺在原模型请求中无缝恢复；如果服务死于工具执行期间，当前请求会失败，但后续用户轮次可在健康重建后继续。
 
 ## 工具结果之后的上游失败与重试安全
 
@@ -104,6 +114,7 @@ DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败�
 | `endpoint` | `http://127.0.0.1:4096` | 模型服务地址；托管模式要求本机回环 HTTP |
 | `opencodeExecutable` / `runtimeRoot` | 自动 | 默认使用插件固定依赖的 1.19.3 CLI；填入外部 CLI 路径则覆盖 / 独立运行目录 |
 | `timeoutMs` / `autoStartTimeoutMs` | `120000` / `15000` | 模型生成 / 服务启动超时，单位毫秒 |
+| `sessionIdleHours` | `168` | 结构化模式 Session 空闲保留小时数（1～2160）；独立的 32 个空闲 Session 数量上限仍有效 |
 | `username` / `passwordEnv` | `opencode` / `OPENCODE_SERVER_PASSWORD` | 认证设置；托管服务始终生成随机密码 |
 | `models` | 两个默认模型 ID | 可编辑列表；列表出现不代表网关已授权使用 |
 
@@ -126,6 +137,7 @@ DSH 历史发生编辑、截断或无法核对的变化，或者上一轮失败�
 | `SERVER_BUNDLED_CLI_UNSUPPORTED` | 当前系统或 CPU 架构没有受支持的官方 CLI 包 |
 | `SERVER_NOT_INSTALLED` | 显式指定的外部 CLI 文件不存在；检查 `opencodeExecutable` |
 | `SERVER_GUARD_NOT_READY` | 后台插件未完成启动证明，拒绝继续模型请求 |
+| `SERVER_RECOVERY_COOLDOWN` / `SERVER_RESTARTED` | 本地服务短期反复失效或准备期间进程发生重启，停止旧请求避免使用过期 Session |
 | `CLIENT_RESTRICTED` / `NETWORK_BLOCKED` / `RATE_LIMIT` | 上游网关拒绝或限流。部分官方 OpenCode 客户端也会因 `read/bash` 工具不在请求目录、账号或网络条件触发 `CLIENT_RESTRICTED`；alpha.17 仅修正本插件的受限 Agent 工具声明，不保证所有免费账户/网络可用，也不会绕过服务端拒绝 |
 | `TOOL_RESULT_REQUIRED` / `TOOL_RESULT_MISMATCH` | DSH 返回结果与当前等待的调用 ID 不符，不能重放 |
 | `TOOL_CONTINUATION_FAILED` | DSH 已收到工具调用后 OpenCode 模型续接失败；保留真实上游错误与状态，不允许重复提交已完成工具结果 |

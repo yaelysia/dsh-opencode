@@ -56,7 +56,8 @@ export class StructuredAdapterRuntime {
     this.sessions = new StructuredSessionRegistry({
       onRetire: id => this.reclaim(id),
       maxIdle: 32,
-      idleTtlMs: 30 * 60_000,
+      idleTtlMs: (Number.isInteger(config.sessionIdleHours) && config.sessionIdleHours >= 1
+        && config.sessionIdleHours <= 2160 ? config.sessionIdleHours : 168) * 60 * 60_000,
     });
     this.contextBudget = new ContextBudget(this.client, { logger: config.logger });
     this.sweeper = setInterval(() => this.sessions.sweep(), 60_000);
@@ -69,6 +70,21 @@ export class StructuredAdapterRuntime {
   }
 
   key(options) { return JSON.stringify([options.sessionId ?? '', options.model, options.purpose ?? 'chat']); }
+
+  onServiceRestart() {
+    // Invalidate every in-memory upstream identity before its process is killed.
+    // Retained DSH tool calls remain terminal: never restart their POSTs.
+    for (const turn of [...this.turns.values()]) {
+      this.fail(turn, failure('Managed OpenCode became unresponsive; current turn cannot be replayed',
+        'TRANSPORT'));
+    }
+    for (const [key, entry] of this.sessions.entries) {
+      if (entry.state === 'idle') this.sessions.retire(key);
+    }
+    this.sessions.clear();
+    this.contextBudget.cached = null;
+    this.contextBudget.expiresAt = 0;
+  }
 
   async deleteOwnedSession(id) {
     try {
@@ -158,6 +174,10 @@ export class StructuredAdapterRuntime {
     if (turn.closed) return;
     const terminal = afterToolFailure(error, turn.handedOff);
     turn.error = terminal;
+    // A model timeout is not proof of a dead server. Probe the local health
+    // endpoint before considering a restart; never react to upstream 429.
+    if (['TRANSPORT', 'TIMEOUT', 'TOOL_TRANSPORT_CLOSED'].includes(error?.code)
+      && !turn.controller.signal.aborted) this.config.reportLocalFailure?.();
     if (turn.lastCallId && terminal?.code === 'TOOL_CONTINUATION_FAILED') {
       // Keep the original failure for a stale retry of THIS exact tool result.
       this.terminalFailures.delete(turn.key);
@@ -208,6 +228,7 @@ export class StructuredAdapterRuntime {
     if (this.disposed || options.signal?.aborted) throw failure('Structured startup cancelled', 'ABORTED');
     const key = this.key(options);
     const system = instructions(options);
+    const generation = this.config.serviceGenerationProvider?.();
     await this.journal.init();
     const reusable = options.sessionId ? this.sessions.plan(key, options.messages ?? [], system) : null;
     let id = reusable?.id;
@@ -239,6 +260,10 @@ export class StructuredAdapterRuntime {
       if (!id) {
         id = await this.client.createSession(options.signal);
         await this.journal.track(id);
+      }
+      if (generation !== undefined && this.config.serviceGenerationProvider?.() !== generation) {
+        throw failure('Managed OpenCode restarted while preparing a model request',
+          'SERVER_RESTARTED');
       }
       turn = { id, key, queue: [], wake: null, dshSessionId: options.sessionId,
         dshMessages: options.messages ?? [], system, reply: '', completed: false, lastUsage: null,
