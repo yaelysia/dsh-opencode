@@ -488,7 +488,10 @@ export class StructuredAdapterRuntime {
             inputTokens: body.info?.tokens?.input, outputTokens: body.info?.tokens?.output });
           this.trace('stream', 'turn.finished', { sessionId: options.sessionId, model: options.model });
           if (body.info?.tokens) yield { type: 'usage', usage: {
-            inputTokens: Number(body.info.tokens.input) || 0, outputTokens: Number(body.info.tokens.output) || 0,
+            inputTokens: Number(body.info.tokens.input) || 0,
+            outputTokens: Number(body.info.tokens.output) || 0,
+            cacheReadTokens: Number(body.info.tokens.cache?.read) || 0,
+            cacheWriteTokens: Number(body.info.tokens.cache?.write) || 0,
           } };
           turn.completed = true;
           yield { type: 'finish', reason: { kind: body.info?.finish === 'length' ? 'max-tokens' : 'stop' } };
