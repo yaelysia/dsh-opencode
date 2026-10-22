@@ -42,6 +42,7 @@ test('startup cleans only dead-owner journal entries and leaves live instances u
   const sweep = new SessionJournal({ directory: dir, isAlive: () => false,
     removeSession: async id => { removed.push(id); } });
   await sweep.init();
+  await sweep.drain();
   assert.deepEqual(removed, ['ses_leftover']);
   assert.deepEqual(await readdir(dir), []);
 });
@@ -77,4 +78,27 @@ test('idle cache expires and never retires reserved or waiting-tool sessions', (
   registry.waiting('s2', 'oc2');
   registry.sweep();
   assert.equal(registry.entries.get('s2').state, 'waiting-tool');
+});
+
+test('orphan recovery does not block requests and never launches unbounded DELETEs', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-recovery-queue-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const owner = new SessionJournal({ directory: dir, removeSession: async () => {} });
+  for (let i = 0; i < 6; i++) await owner.track('ses_orphan_' + i);
+  for (const name of await readdir(dir)) {
+    const file = path.join(dir, name);
+    const record = JSON.parse(await readFile(file, 'utf8'));
+    await writeFile(file, JSON.stringify({ ...record, pid: 99999999 }));
+  }
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const started = [];
+  const recovery = new SessionJournal({ directory: dir, isAlive: () => false,
+    removeSession: async id => { started.push(id); await wait; } });
+  await recovery.init(); // Must return while DELETE is still waiting.
+  assert.equal(started.length, 2, 'at most two simultaneous recovery deletes');
+  release();
+  await recovery.drain();
+  assert.equal(started.length, 2, 'shutdown must stop dispatching queued stale deletions');
+  assert.equal((await readdir(dir)).length, 4, 'unprocessed journal records are retained');
 });
