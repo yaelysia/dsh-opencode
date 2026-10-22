@@ -352,3 +352,22 @@ test('legacy OpenCode session reuse is invalidated when the managed child genera
   assert.match(tx.calls.at(-1).body.parts[0].text, /Hello/,
     'a recovered child receives authoritative DSH history, not an orphaned incremental fragment');
 });
+
+test('provider 429 and CLIENT_RESTRICTED cannot trigger local process recovery', async () => {
+  let probes = 0;
+  const config = { reportLocalFailure: () => { probes++; } };
+  for (const [status, message] of [[429, 'Rate limit exceeded'],
+    [403, 'This model can only be used from within OpenCode']]) {
+    const client = new OpenCodeServeClient(config, transport(() =>
+      ({ info: { error: { name: 'APIError', data: {
+        statusCode: status, message,
+      } } }, parts: [] })).fetch);
+    await assert.rejects(client.complete(call()));
+  }
+  assert.equal(probes, 0, 'upstream rejections must not be interpreted as dead local OpenCode');
+  const broken = new OpenCodeServeClient(config, transport(() => {
+    throw new TypeError('Local HTTP socket failed');
+  }).fetch);
+  await assert.rejects(broken.complete(call()), error => error.code === 'TRANSPORT');
+  assert.equal(probes, 1, 'raw local transport failure should request a liveness probe');
+});
