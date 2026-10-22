@@ -78,7 +78,8 @@ test('the installed bundle ships a prebuilt DSH browser half without prepare scr
 
 test('the DSH client factory contributes settings directly to the bundle detail page', () => {
   const { exports, created } = loadClient();
-  assert.deepEqual([...exports.inject], ['slots', 'locale', 'configForms']);
+  assert.deepEqual([...exports.inject],
+    ['slots', 'locale', 'configForms', 'sidebarRight', 'sidebarRightTabs']);
   const effects = [];
   let registration, dictionaries, watched;
   const scope = { getSnapshot: () => ({ value: {
@@ -121,7 +122,7 @@ test('the DSH client factory contributes settings directly to the bundle detail 
     'structuredToolsEnabled','guardedReadCompatibility','ssePreviewEnabled','toolBridgeEnabled',
     'localTitles','strictOwnedServer','autoStart','autoStartDirect',
     'endpoint','opencodeExecutable','runtimeRoot','username','passwordEnv',
-    'timeoutMs','autoStartTimeoutMs','sessionIdleHours','models',
+    'timeoutMs','autoStartTimeoutMs','sessionIdleHours','diagnosticsPort','diagnosticsEnabled','models',
   ].sort());
   face.edit('guardedReadCompatibility', 'true');
   face.edit('ssePreviewEnabled', 'false');
@@ -195,6 +196,12 @@ test('form field parsers reject malformed values before persisting', () => {
   assert.equal(specs.sessionIdleHours.parse('-1'), undefined);
   assert.equal(specs.sessionIdleHours.parse('2161'), undefined);
   assert.ok(specs.sessionIdleHours.parse('2160'));
+  assert.equal(specs.diagnosticsPort.parse('1023'), undefined);
+  assert.equal(specs.diagnosticsPort.parse('65536'), undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.diagnosticsPort.parse('4097'))),
+    { kind: 'set', value: 4097 });
+  assert.deepEqual(JSON.parse(JSON.stringify(specs.diagnosticsEnabled.parse('true'))),
+    { kind: 'set', value: true });
   assert.deepEqual(JSON.parse(JSON.stringify(specs.sessionIdleHours.parse(''))),
     { kind: 'clear' });
   assert.deepEqual(JSON.parse(JSON.stringify(specs.models.parse('model-a\nmodel-b'))), { kind: 'set', value: ['model-a','model-b'] });
@@ -226,4 +233,35 @@ test('configuration page blocks an invalid guarded-read and auto-start combinati
   state = face.hooks.opencodeSettings.getSnapshot();
   assert.equal(state.guardConflict, false);
   assert.equal(state.invalid, false);
+});
+
+test('diagnostic view extends model-adjacent composer and custom Sidebar tab without replacement', () => {
+  const { exports } = loadClient();
+  const registered = [], kinds = [], opened = [];
+  const ctx = {
+    effect(fn) { fn(); },
+    locale: { bind: () => key => key, register: () => () => {} },
+    configForms: {
+      get: () => ({ getSnapshot: () => ({ value: { diagnosticsEnabled: true, diagnosticsPort: 4107 } }) }),
+      whileServed: (_ids, register) => register(),
+    },
+    sidebarRightTabs: { register(definition) { kinds.push(definition); return () => {}; } },
+    sidebarRight: { openTab(kind) { opened.push(kind); } },
+    slots: { inject(name, attach) { return attach(); },
+      register(opts, component) { registered.push({ opts, component }); return () => {}; } },
+  };
+  exports.apply(ctx);
+  assert.equal(kinds.length, 1);
+  assert.equal(kinds[0].kind, 'dsh-opencode-diagnostics');
+  const right = registered.find(x => x.opts.name === 'conversation.input.right');
+  const pane = registered.find(x => x.opts.name === 'sidebar.right.pane.tab');
+  assert.ok(right);
+  assert.ok(pane);
+  assert.equal(right.opts.id, 'dsh-opencode-context');
+  assert.equal(pane.opts.key, 'dsh-opencode/diagnostics');
+  const injected = right.opts.inject('some-dsh-session');
+  assert.equal(injected.port, 4107);
+  injected.openDiagnostics();
+  assert.deepEqual(opened, ['dsh-opencode-diagnostics']);
+  assert.equal(pane.opts.inject('same-session').sessionId, 'same-session');
 });
