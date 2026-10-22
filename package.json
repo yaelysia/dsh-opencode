@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode",
-  "version": "0.2.0-alpha.22",
+  "version": "0.2.0-alpha.23",
   "type": "module",
   "main": "./index.js",
   "exports": {
