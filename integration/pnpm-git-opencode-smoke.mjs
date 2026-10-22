@@ -25,7 +25,7 @@ test('DSH-style pnpm add from Git works with default lifecycle scripts', {
   const win = process.platform === 'win32';
   const gitSpec = 'git+https://github.com/yaelysia/dsh-opencode.git#' + ref;
   const install = spawnSync(win ? 'pnpm.cmd' : 'pnpm',
-    ['add', gitSpec, '--no-frozen-lockfile', '--config.auto-install-peers=false'], {
+    ['add', gitSpec, '--config.auto-install-peers=false'], {
       cwd: root, encoding: 'utf8', shell: win, windowsHide: true, timeout: 240_000,
       env: { ...process.env, CI: 'true' },
     });
