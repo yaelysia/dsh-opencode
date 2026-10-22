@@ -113,3 +113,20 @@ test('local transport failure requests a health probe, but a healthy server stay
   assert.equal(manager.generation, 1);
   assert.deepEqual(events, []);
 });
+
+test('watchdog detects a live but unresponsive PID without a new model request', {
+  timeout: 20000,
+}, async t => {
+  const { manager, events } = await fixture(t, { healthIntervalMs: 100 });
+  const first = manager.owned;
+  const original = manager.health.bind(manager);
+  manager.health = async () => manager.owned === first && manager.readyOwned
+    ? false : original();
+  const until = Date.now() + 12000;
+  while (manager.generation < 2 && Date.now() < until) {
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  assert.equal(manager.generation, 2, 'watchdog must recover without a new DSH stream');
+  assert.deepEqual(events, ['invalidate']);
+  assert.equal(manager.guardVerified, true);
+});
