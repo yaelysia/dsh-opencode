@@ -57,7 +57,7 @@ export class StructuredSessionRegistry {
     const suffix = messages.slice(entry.count);
     let offset = 0;
     if (suffix[0]?.role === 'assistant') {
-      if (hasToolCall(suffix[0]) || visibleText(suffix[0].content) !== entry.reply) {
+      if (hasToolCall(suffix[0]) || digest(visibleText(suffix[0].content)) !== entry.replyHash) {
         this.retire(key);
         return null;
       }
@@ -99,7 +99,7 @@ export class StructuredSessionRegistry {
     const entry = this.entries.get(key);
     if (entry?.id !== id || !Array.isArray(messages) || typeof reply !== 'string') return;
     Object.assign(entry, { state: 'idle', count: messages.length, checkpoint: digest(messages),
-      system, reply, lastUsage, lastActiveAt: this.now() });
+      system, replyHash: digest(reply), lastUsage, lastActiveAt: this.now() });
     this.entries.delete(key);
     this.entries.set(key, entry);
     this.sweep();
