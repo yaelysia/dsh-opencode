@@ -248,3 +248,22 @@ test('single DSH plugin wires managed process restart to structured Session inva
     assert.equal(runtime.adapter.runtime.sessions.entries.size, 0);
   } finally { await runtime.dispose(); }
 });
+
+test('diagnostic context becomes unknown when an idle OpenCode Session expires', async () => {
+  const recorded = [];
+  const broker = new StructuredToolBroker();
+  const adapter = createStructuredAdapter({
+    sessionIdleHours: 1, diagnosticEvent() {},
+    diagnosticContext: (id, values) => recorded.push({ id, values }),
+  }, broker, async () => { throw Error('Network must not be accessed'); });
+  try {
+    const key = JSON.stringify(['expired-dsh', model, 'chat']);
+    adapter.runtime.sessions.active(key, 'oc-expired');
+    adapter.runtime.sessions.complete(key, 'oc-expired', [user], '', 'answer');
+    adapter.runtime.sessions.entries.get(key).lastActiveAt -= 2 * 60 * 60_000;
+    adapter.runtime.sessions.sweep();
+    assert.deepEqual(recorded.at(-1), { id: 'expired-dsh',
+      values: { used: null, phase: 'unknown' } });
+    assert.equal(adapter.runtime.sessions.entries.has(key), false);
+  } finally { await adapter.runtime.dispose(); }
+});
