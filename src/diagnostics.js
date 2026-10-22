@@ -9,6 +9,7 @@ const FIELDS = new Set([
   'used', 'limit', 'estimated', 'projected', 'threshold', 'total', 'idle',
   'running', 'durationMs', 'generation', 'pid', 'count', 'attempt', 'port',
   'remaining', 'cached', 'inputTokens', 'outputTokens', 'contextSource',
+  'authSource', 'proxyMode',
 ]);
 const LEVELS = new Set(['debug', 'info', 'warn', 'error']);
 const TYPES = new Set(['service', 'session', 'context', 'compaction', 'tool',
