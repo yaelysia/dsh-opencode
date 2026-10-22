@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { Script } from 'node:vm';
@@ -66,9 +66,14 @@ test('diagnostics expose only bounded redacted metadata and prevent cross-origin
   assert.equal((await fetch(origin + '/v1/events', { headers: {
     ...common, Origin: 'https://attacker.example',
   } })).status, 403);
-  assert.equal((await fetch(origin + '/v1/events', { headers: {
-    ...common, Host: 'evil.example',
-  } })).status, 403);
+  const forgedHostStatus = await new Promise((resolve, reject) => {
+    const req = httpRequest(origin + '/v1/events', { headers: {
+      Host: 'evil.example', 'X-DSH-Diagnostic': '1',
+    } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(forgedHostStatus, 403);
   assert.equal((await fetch(origin + '/v1/badge?sid=s')).status, 200);
   assert.equal((await fetch(origin + '/v1/page?sid=s')).status, 200);
   await hub.writeChain;
