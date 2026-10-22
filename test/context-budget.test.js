@@ -63,3 +63,20 @@ test('unavailable model catalog fails open to native OpenCode overflow handling'
   assert.equal(calls, 1);
   assert.equal(warnings, 1);
 });
+
+
+test('large advertised output limit cannot exhaust a valid input budget', () => {
+  const budget = new ContextBudget({});
+  const window = { context: 262144, input: 131072, output: 131072 };
+  const result = budget.check({ window, prompt: 'hello', system: 'instructions',
+    tools: [], reused: false });
+  assert.equal(result.action, 'allow');
+  assert.ok(result.usable > 90000, 'a model output ceiling is not the required output of each turn');
+  assert.equal(budget.check({ window, prompt: 'hello', system: 'instructions',
+    tools: [], reused: true, priorTokens: 100000 }).action, 'compact');
+  assert.equal(modelWindow({ all: {} }, 'opencode', 'model'), null);
+});
+
+test('large ASCII token estimates do not require a per-character match array', () => {
+  assert.equal(estimateTokens('a'.repeat(600000)), 200000);
+});
