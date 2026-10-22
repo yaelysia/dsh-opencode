@@ -198,3 +198,25 @@ Regression coverage:
   category, level and export redacted JSONL. A port collision does not fail the model.
 - Included health/process, Session GC, context and tool handoff event categories.
   A full DSH Desktop smoke remains necessary for iframe/CSP and Sidebar rendering.
+
+## 2026-10-22 — Alpha.23 provider-gated native dock and Zen diagnostics
+
+After Desktop field feedback, the diagnostic badge was removed from the composer
+model row. The client now registers `conversation.composer.dock` using the
+official session-addressed `modelDirectories.directoryFor(sessionId).store`
+from DSH (same pattern as Yan-Zero/dsh-codex). Rendering is restricted to
+`selection.status === "ready"` and `selection.current.provider === "opencode-serve"`.
+The dock component uses CSS order 10 so it appears immediately AFTER DSH's
+native context meter ring in the shared flex container, never inside the editor.
+An unobtrusive status dot conveys native compaction state, and a plain Logs
+link opens DSH's existing Sidebar Browser. ConfigMirror subscription and
+unmounting on provider switch were added to tests.
+
+Bundling the official OpenCode 1.19.3 binary does not grant Zen free-model
+entitlement or copy credentials from other applications. On each managed child
+startup, the plugin reports only local auth-material presence and its child
+proxy-variable policy (`zen.environment`), never credential content; an upstream
+`CLIENT_RESTRICTED` emits `zen.free-access-restricted` as a distinct error.
+Official OpenCode clients also reported the same Zen free-tier rejection in
+October 2026. No client-identity spoofing, tool permission relaxation or
+provider bypass is implemented. First-party Desktop acceptance remains required.
